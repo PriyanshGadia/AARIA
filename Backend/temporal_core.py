@@ -635,11 +635,14 @@ class TemporalCore:
                     # Build prompt with personality and emotional context
                     prompt = self._build_llm_prompt(input_text, processed_input)
                     
+                    # Calculate temperature: base 0.7 + creativity boost up to 1.0
+                    # Higher creativity trait increases randomness for more varied responses
+                    BASE_TEMPERATURE = 0.7
+                    CREATIVITY_BOOST = 0.3
+                    temperature = BASE_TEMPERATURE + (self.personality.creativity * CREATIVITY_BOOST)
+                    
                     # Get response from LLM
-                    llm_response = await self.llm_gateway.generate(
-                        prompt, 
-                        temperature=0.7 + (self.personality.creativity * 0.3)
-                    )
+                    llm_response = await self.llm_gateway.generate(prompt, temperature=temperature)
                     
                     if llm_response.success:
                         response_text = llm_response.content

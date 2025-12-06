@@ -34,7 +34,7 @@ async def test_llm_integration():
             
             for name, info in status['providers'].items():
                 if info['available']:
-                    print(f"      - {name}: {info['description']}")
+                    print(f"      - {name}: Available")
         else:
             print("   ✗ LLM Gateway not initialized")
             return
