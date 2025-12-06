@@ -1,61 +1,40 @@
-# AARIA System Requirements
-# Project: Advanced Autonomous Responsive Intelligent Assistant
-# Version: 1.0.0
-# Description: Core dependencies for AARIA's neural architecture and functionality
-# 
-# IMPORTANT: This is an open-source, zero-cost project. All dependencies should be
-# free and open-source. No paid APIs or services should be required.
+# AARIA - Advanced Autonomous Responsive Intelligent Assistant
+# Python Dependencies - v1.0
+# No external paid services - all open source
 
-# ==================== Core Scientific Computing ====================
-numpy>=1.24.0,<2.0.0
-scipy>=1.10.0,<2.0.0
+# Core Dependencies
+numpy>=1.24.0
+asyncio>=3.4.3
 
-# ==================== Natural Language Processing ====================
-nltk>=3.8.0,<4.0.0
-textblob>=0.17.0,<1.0.0
+# Encryption & Security
+cryptography>=41.0.0
 
-# ==================== Cryptography & Security ====================
-cryptography>=41.0.0,<43.0.0
+# Database
+sqlite3; python_version >= '3.0'
 
-# ==================== Graph & Network Analysis ====================
-networkx>=3.1,<4.0.0
+# Optional: ML & NLP (can be added later)
+# torch>=2.0.0  # For local ML models
+# transformers>=4.30.0  # For Llama/local LLM
+# sentence-transformers>=2.2.0  # For embeddings
 
-# ==================== Data Structures & Utilities ====================
-dataclasses-json>=0.6.0,<1.0.0  # Required for Temporal Core's EmotionalState serialization
+# Optional: Audio Processing
+# pyaudio>=0.2.13  # For voice input
+# SpeechRecognition>=3.10.0  # For STT
+# pyttsx3>=2.90  # For TTS
 
-# ==================== Hardware Monitoring (Optional but Recommended) ====================
-psutil>=5.9.0,<6.0.0
+# Optional: Computer Vision
+# opencv-python>=4.8.0  # For visual processing
+# pillow>=10.0.0  # For image handling
 
-# ==================== Computer Vision (Optional - for Occipital Core) ====================
-# opencv-python>=4.8.0,<5.0.0  # Uncomment when vision features are needed
-# face-recognition>=1.3.0,<2.0.0  # Uncomment when biometric auth is needed
+# Optional: System Control
+# pyautogui>=0.9.54  # For desktop automation
+# selenium>=4.10.0  # For browser automation
 
-# ==================== Text-to-Speech / Speech-to-Text (Optional - for Temporal Core) ====================
-# To enable voice features:
-#   1. Uncomment the dependencies below
-#   2. Run: pip install pyttsx3 SpeechRecognition
-#   3. Temporal Core will automatically detect and use these features
-# pyttsx3>=2.90  # Offline TTS engine
-# SpeechRecognition>=3.10.0  # Speech recognition (requires pyaudio for microphone input)
+# Optional: Communication APIs
+# twilio>=8.5.0  # For telephony (requires account)
+# python-telegram-bot>=20.4  # For Telegram
+# requests>=2.31.0  # For API calls
 
-# ==================== Web Framework (Optional - for API/Frontend) ====================
-# fastapi>=0.104.0,<1.0.0  # When web interface is needed
-# uvicorn>=0.24.0,<1.0.0  # ASGI server for FastAPI
-# websockets>=12.0,<13.0  # For real-time communication
-
-# ==================== Development & Testing ====================
-# pytest>=7.4.0,<8.0.0  # For unit tests
-# pytest-asyncio>=0.21.0,<1.0.0  # For async test support
-# black>=23.0.0,<24.0.0  # Code formatter
-# flake8>=6.1.0,<7.0.0  # Linter
-# mypy>=1.6.0,<2.0.0  # Type checker
-
-# ==================== Notes ====================
-# Installation instructions:
-# 1. Install Python 3.10 or higher
-# 2. Create virtual environment: python3 -m venv aaria_env
-# 3. Activate: source aaria_env/bin/activate (Linux/Mac) or aaria_env\Scripts\activate (Windows)
-# 4. Install: pip install -r requirements.txt
-# 5. Download NLTK data: python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); nltk.download('vader_lexicon')"
-#
-# Optional dependencies can be installed as needed based on deployment requirements
+# Development & Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

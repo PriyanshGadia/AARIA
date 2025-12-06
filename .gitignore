@@ -21,10 +21,10 @@ wheels/
 *.egg
 
 # Virtual Environment
-aaria_env/
 venv/
-ENV/
 env/
+ENV/
+.venv
 
 # IDE
 .vscode/
@@ -34,34 +34,36 @@ env/
 *~
 .DS_Store
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# AARIA Data Directories
+data/
+logs/
+backups/
+config/aaria_config.json
 
-# Logs
+# Temporary Files
+/tmp/
+*.tmp
 *.log
-aaria_system.log
-
-# Database
 *.db
-*.sqlite
-*.sqlite3
-
-# Encrypted Data (DO NOT COMMIT)
-*.enc
-*.key
-owner_database/
-secure_enclave/
-
-# Configuration (use .env.example instead)
-.env
-config.local.*
+*.db-journal
 
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
 
-# Temporary files
-tmp/
-temp/
-*.tmp
+# Secrets (NEVER commit these)
+*.key
+*.pem
+*.crt
+secrets.json
+.env
+
+# OS Files
+Thumbs.db
+.DS_Store
+
+# Project Specific
+/config/*.json
+!/config/README.md
