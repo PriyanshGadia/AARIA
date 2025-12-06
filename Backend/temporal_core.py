@@ -30,6 +30,13 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 import threading
 import queue
 
+# Import LLM Gateway
+try:
+    from llm_gateway import get_llm_gateway, LLMRequest, LLMProvider, PrivacyLevel
+except ImportError:
+    logger.warning("LLM Gateway not available")
+    get_llm_gateway = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -38,10 +45,14 @@ try:
     nltk.data.find('tokenizers/punkt')
     nltk.data.find('tokenizers/punkt_tab')
     nltk.data.find('vader_lexicon')
+    nltk.data.find('taggers/averaged_perceptron_tagger')
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
 except LookupError:
     nltk.download('punkt', quiet=True)
-    nltk.download('punkt_tab', quiet=True)      # <-- added
+    nltk.download('punkt_tab', quiet=True)
     nltk.download('vader_lexicon', quiet=True)
+    nltk.download('averaged_perceptron_tagger', quiet=True)
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)
 
 
 # ==================== CONFIGURATION LOADER ====================
@@ -263,8 +274,16 @@ class Mood:
             self.trend = "stable"
             return
         
-        avg_recent = sum(e.intensity for e in recent_emotions[:3]) / 3
-        avg_previous = sum(e.intensity for e in recent_emotions[3:]) / min(2, len(recent_emotions)-3)
+        # Calculate averages with safety checks for division by zero
+        recent_count = min(3, len(recent_emotions))
+        previous_count = len(recent_emotions) - recent_count
+        
+        if recent_count == 0 or previous_count == 0:
+            self.trend = "stable"
+            return
+        
+        avg_recent = sum(e.intensity for e in recent_emotions[:recent_count]) / recent_count
+        avg_previous = sum(e.intensity for e in recent_emotions[recent_count:]) / previous_count
         
         if avg_recent > avg_previous * 1.2:
             self.trend = "improving"
@@ -3154,8 +3173,56 @@ class TemporalNeuralNetwork:
         return activated
     
     async def _generate_response(self, context: Dict[str, Any], activated_neurons: List[str]) -> Dict[str, Any]:
-        """Generate response using activated neurons"""
-        # Find language generation neurons
+        """Generate response using activated neurons and LLM if available"""
+        
+        # Try to use LLM Gateway for enhanced responses
+        if get_llm_gateway:
+            try:
+                llm_gateway = await get_llm_gateway()
+                
+                if llm_gateway.enabled:
+                    # Prepare prompt from context
+                    user_input = context.get("text", context.get("content", ""))
+                    intent = context.get("intent", "unknown")
+                    entities = context.get("entities", [])
+                    
+                    # Create system prompt with personality
+                    system_prompt = f"You are AARIA, a personal AI assistant. "
+                    if self.personality_profile:
+                        traits = self.personality_profile
+                        system_prompt += f"Your personality: Openness={traits.get('openness', 0.5):.1f}, "
+                        system_prompt += f"Conscientiousness={traits.get('conscientiousness', 0.5):.1f}, "
+                        system_prompt += f"Extraversion={traits.get('extraversion', 0.5):.1f}. "
+                    system_prompt += "Be helpful, natural, and concise in your responses."
+                    
+                    # Create LLM request
+                    llm_request = LLMRequest(
+                        prompt=user_input,
+                        provider=llm_gateway.default_provider,
+                        privacy_level=PrivacyLevel.CONFIDENTIAL,
+                        max_tokens=150,
+                        temperature=0.7,
+                        system_prompt=system_prompt,
+                        context=context
+                    )
+                    
+                    # Generate response
+                    llm_response = await llm_gateway.generate_response(llm_request)
+                    
+                    return {
+                        "generated_response": llm_response.text,
+                        "method": f"llm_{llm_response.provider}",
+                        "confidence": llm_response.confidence,
+                        "tokens_used": llm_response.tokens_used,
+                        "response_characteristics": {
+                            "provider": llm_response.provider,
+                            "personality_applied": bool(self.personality_profile)
+                        }
+                    }
+            except Exception as e:
+                logger.warning(f"LLM generation failed, using fallback: {e}")
+        
+        # Fallback to neuron-based generation
         language_neurons = [n for n in self.neurons.values() 
                            if n.specialization == "language" and n.neuron_id in activated_neurons]
         

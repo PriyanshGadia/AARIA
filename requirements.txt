@@ -1,0 +1,33 @@
+# AARIA System Requirements
+# VERSION: 1.0.0
+# DESCRIPTION: Python package dependencies for AARIA cognitive architecture
+# UPDATE NOTES: Initial release with core dependencies
+
+# Core Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Encryption & Security
+cryptography>=41.0.0
+
+# Natural Language Processing
+textblob>=0.17.0
+nltk>=3.8.0
+
+# System & Hardware Monitoring
+psutil>=5.9.0
+
+# Graph & Network Analysis
+networkx>=3.1
+
+# Data Structures
+dataclasses-json>=0.6.0
+
+# HTTP Client for LLM Integration
+aiohttp>=3.9.0
+
+# Note: The following are optional and require separate installation:
+# - OpenCV (cv2) for vision processing: pip install opencv-python
+# - face_recognition for biometric auth: pip install face-recognition
+# - pyttsx3 for TTS: pip install pyttsx3
+# - SpeechRecognition for STT: pip install SpeechRecognition

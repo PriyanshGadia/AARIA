@@ -600,7 +600,7 @@ class EvolutionNeuralNetwork:
     async def propose_evolution(self, performance_data: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a proposal for system evolution"""
         
-        # robust selection of target_core (replace the original loop)
+        # Robust selection of target_core with type checking
         target_core = "frontal"  # Default
         min_score = 1.0
 
@@ -624,13 +624,6 @@ class EvolutionNeuralNetwork:
             except Exception:
                 score = 0.0
 
-            if score < min_score:
-                min_score = score
-                target_core = core
-
-        
-        for core, metrics in performance_data.items():
-            score = metrics.get("success_rate", 0)
             if score < min_score:
                 min_score = score
                 target_core = core
