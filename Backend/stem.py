@@ -340,40 +340,20 @@ class AARIA_Stem:
                     }
                 }
             }
+            # Initialize will auto-detect available providers (Ollama, API keys)
             await llm_gateway.initialize(llm_config)
             
-            # Check if real LLM is available
-            test_request = LLMRequest(
-                prompt="test",
-                provider=LLMProvider.LOCAL,
-                privacy_level=PrivacyLevel.PUBLIC
-            )
-            
-            try:
-                # Try to connect to Ollama
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.get("http://localhost:11434/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
-                        if response.status == 200:
-                            logger.info("LLM Gateway initialized with LOCAL Ollama (llama3:latest recommended)")
-                        else:
-                            logger.warning("Ollama not responding - falling back to minimal NLP")
-                            logger.warning("⚠️  INSTALL OLLAMA FOR REAL AI: curl https://ollama.ai/install.sh | sh")
-                            logger.warning("⚠️  THEN RUN: ollama pull llama3:latest")
-                            llm_gateway.enabled = True  # Keep enabled to show warnings
-                            llm_gateway.default_provider = LLMProvider.FALLBACK
-            except Exception as e:
-                logger.warning(f"No local LLM available: {e}")
+            # Show setup instructions if no providers available
+            if llm_gateway.default_provider == LLMProvider.FALLBACK:
+                logger.warning("⚠️  NO AI PROVIDERS FOUND - FALLBACK MODE ONLY")
                 logger.warning("⚠️  FOR INTELLIGENT AI RESPONSES:")
                 logger.warning("⚠️  Option 1: Install Ollama (FREE, LOCAL, PRIVATE)")
                 logger.warning("⚠️    curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest")
-                logger.warning("⚠️  Option 2: Use Cloud LLM (PAID)")
+                logger.warning("⚠️  Option 2: Use Cloud LLM")
+                logger.warning("⚠️    - Gemini (FREE): export GEMINI_API_KEY='your-key'")
+                logger.warning("⚠️    - Groq (fast, cheap): export GROQ_API_KEY='your-key'")
                 logger.warning("⚠️    - OpenAI: export OPENAI_API_KEY='your-key'")
-                logger.warning("⚠️    - Anthropic Claude: export ANTHROPIC_API_KEY='your-key'")
-                logger.warning("⚠️    - Google Gemini: export GEMINI_API_KEY='your-key'")
-                logger.warning("⚠️    - Groq (ultra-fast): export GROQ_API_KEY='your-key'")
-                llm_gateway.enabled = True
-                llm_gateway.default_provider = LLMProvider.FALLBACK
+                logger.warning("⚠️    - Anthropic: export ANTHROPIC_API_KEY='your-key'")
                 
         except Exception as e:
             logger.error(f"LLM Gateway initialization failed: {e}")
