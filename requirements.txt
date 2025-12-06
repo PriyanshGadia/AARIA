@@ -1,0 +1,57 @@
+# AARIA System Requirements
+# Project: Advanced Autonomous Responsive Intelligent Assistant
+# Version: 1.0.0
+# Description: Core dependencies for AARIA's neural architecture and functionality
+# 
+# IMPORTANT: This is an open-source, zero-cost project. All dependencies should be
+# free and open-source. No paid APIs or services should be required.
+
+# ==================== Core Scientific Computing ====================
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+
+# ==================== Natural Language Processing ====================
+nltk>=3.8.0,<4.0.0
+textblob>=0.17.0,<1.0.0
+
+# ==================== Cryptography & Security ====================
+cryptography>=41.0.0,<43.0.0
+
+# ==================== Graph & Network Analysis ====================
+networkx>=3.1,<4.0.0
+
+# ==================== Data Structures & Utilities ====================
+dataclasses-json>=0.6.0,<1.0.0
+
+# ==================== Hardware Monitoring (Optional but Recommended) ====================
+psutil>=5.9.0,<6.0.0
+
+# ==================== Computer Vision (Optional - for Occipital Core) ====================
+# opencv-python>=4.8.0,<5.0.0  # Uncomment when vision features are needed
+# face-recognition>=1.3.0,<2.0.0  # Uncomment when biometric auth is needed
+
+# ==================== Text-to-Speech / Speech-to-Text (Optional - for Temporal Core) ====================
+# pyttsx3>=2.90  # Offline TTS engine (when voice features are activated)
+# SpeechRecognition>=3.10.0  # Speech recognition (when voice features are activated)
+
+# ==================== Web Framework (Optional - for API/Frontend) ====================
+# fastapi>=0.104.0,<1.0.0  # When web interface is needed
+# uvicorn>=0.24.0,<1.0.0  # ASGI server for FastAPI
+# websockets>=12.0,<13.0  # For real-time communication
+
+# ==================== Development & Testing ====================
+# pytest>=7.4.0,<8.0.0  # For unit tests
+# pytest-asyncio>=0.21.0,<1.0.0  # For async test support
+# black>=23.0.0,<24.0.0  # Code formatter
+# flake8>=6.1.0,<7.0.0  # Linter
+# mypy>=1.6.0,<2.0.0  # Type checker
+
+# ==================== Notes ====================
+# Installation instructions:
+# 1. Install Python 3.10 or higher
+# 2. Create virtual environment: python3 -m venv aaria_env
+# 3. Activate: source aaria_env/bin/activate (Linux/Mac) or aaria_env\Scripts\activate (Windows)
+# 4. Install: pip install -r requirements.txt
+# 5. Download NLTK data: python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); nltk.download('vader_lexicon')"
+#
+# Optional dependencies can be installed as needed based on deployment requirements
