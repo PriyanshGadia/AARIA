@@ -323,8 +323,8 @@ class AARIA_Stem:
                 "default_provider": "local",  # Try local Ollama first
                 "providers": {
                     "local": {
-                        "endpoint": "http://localhost:11434",
-                        "model": "llama2"
+                        "endpoint": "http://localhost:11434/v1",
+                        "model": "llama3:latest"
                     },
                     "openai": {
                         "model": "gpt-3.5-turbo"

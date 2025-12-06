@@ -22,7 +22,7 @@ class LLMProvider(Enum):
     """Supported LLM providers"""
     LOCAL = "local"           # Local models (Ollama, LLaMA)
     OPENAI = "openai"         # OpenAI GPT models
-    ANTHROPIC = "anthropic"   # Claude models
+    GROQ = "groq"             # XAi models
     AZURE = "azure"           # Azure OpenAI
     FALLBACK = "fallback"     # Simple rule-based fallback
 
@@ -179,8 +179,8 @@ class LLMGateway:
                 return await self._local_llm(request)
             elif request.provider == LLMProvider.OPENAI:
                 return await self._openai_llm(request)
-            elif request.provider == LLMProvider.ANTHROPIC:
-                return await self._anthropic_llm(request)
+            elif request.provider == LLMProvider.GROQ:
+                return await self._groq_llm(request)
             else:
                 return await self._fallback_llm(request)
                 
@@ -195,7 +195,7 @@ class LLMGateway:
             import aiohttp
             
             ollama_config = self.providers_config.get("local", {})
-            endpoint = ollama_config.get("endpoint", "http://localhost:11434")
+            endpoint = ollama_config.get("endpoint", "http://localhost:11434/v1")
             model = ollama_config.get("model", "llama2")
             
             # Prepare request
@@ -297,66 +297,79 @@ class LLMGateway:
             logger.warning(f"OpenAI LLM failed: {e}. Using fallback.")
             return await self._fallback_llm(request)
     
-    async def _anthropic_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Anthropic Claude API"""
+    async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
+        """Generate response using Groq API"""
         try:
             import aiohttp
             
-            anthropic_config = self.providers_config.get("anthropic", {})
-            api_key = os.getenv("ANTHROPIC_API_KEY") or anthropic_config.get("api_key")
-            model = anthropic_config.get("model", "claude-3-sonnet-20240229")
+            groq_config = self.providers_config.get("groq", {})
+            api_key = os.getenv("GROQ_API_KEY") or groq_config.get("api_key")
+            model = groq_config.get("model", "mixtral-8x7b-32768")  # Common Groq models: llama3-70b-8192, mixtral-8x7b-32768
             
             if not api_key:
-                logger.warning("Anthropic API key not found, using fallback")
+                logger.warning("Groq API key not found, using fallback")
                 return await self._fallback_llm(request)
             
-            # Prepare request
+            # Prepare request for Groq API
             payload = {
                 "model": model,
                 "max_tokens": request.max_tokens,
                 "messages": [{"role": "user", "content": request.prompt}],
-                "temperature": request.temperature
+                "temperature": request.temperature,
+                "stream": False
             }
             
             if request.system_prompt:
-                payload["system"] = request.system_prompt
+                # For Groq, system prompt is included in the messages array
+                payload["messages"] = [
+                    {"role": "system", "content": request.system_prompt},
+                    {"role": "user", "content": request.prompt}
+                ]
             
             headers = {
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
             
-            # Make request to Anthropic
+            # Make request to Groq
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    "https://api.anthropic.com/v1/messages",
+                    "https://api.groq.com/openai/v1/chat/completions",
                     json=payload,
                     headers=headers,
                     timeout=30
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        tokens = data.get("usage", {}).get("input_tokens", 0) + data.get("usage", {}).get("output_tokens", 0)
+                        
+                        # Groq returns usage information differently
+                        prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
+                        completion_tokens = data.get("usage", {}).get("completion_tokens", 0)
+                        total_tokens = prompt_tokens + completion_tokens
                         
                         # Update token usage
-                        self.token_usage["total"] += tokens
-                        self.token_usage["today"] += tokens
+                        self.token_usage["total"] += total_tokens
+                        self.token_usage["today"] += total_tokens
                         
                         return LLMResponse(
-                            text=data["content"][0]["text"],
-                            provider="anthropic",
-                            tokens_used=tokens,
+                            text=data["choices"][0]["message"]["content"],
+                            provider="groq",
+                            tokens_used=total_tokens,
                             confidence=0.9,
-                            metadata={"model": model, "stop_reason": data.get("stop_reason")}
+                            metadata={
+                                "model": model,
+                                "finish_reason": data["choices"][0].get("finish_reason"),
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens
+                            }
                         )
                     else:
                         error_text = await response.text()
-                        logger.error(f"Anthropic request failed: {response.status} - {error_text}")
+                        logger.error(f"Groq request failed: {response.status} - {error_text}")
                         return await self._fallback_llm(request)
                         
         except Exception as e:
-            logger.warning(f"Anthropic LLM failed: {e}. Using fallback.")
+            logger.warning(f"Groq LLM failed: {e}. Using fallback.")
             return await self._fallback_llm(request)
     
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
