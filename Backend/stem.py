@@ -316,10 +316,10 @@ class AARIA_Stem:
             from llm_gateway import get_llm_gateway
             llm_gateway = await get_llm_gateway()
             
-            # Initialize with default config (disabled by default)
+            # Initialize with default config (ENABLED by default with fallback provider)
             llm_config = {
-                "enabled": False,  # Set to True to enable LLM
-                "default_provider": "fallback",
+                "enabled": True,  # Enable LLM for better responses
+                "default_provider": "fallback",  # Use intelligent fallback by default
                 "providers": {
                     "local": {
                         "endpoint": "http://localhost:11434",
@@ -331,7 +331,7 @@ class AARIA_Stem:
                 }
             }
             await llm_gateway.initialize(llm_config)
-            logger.info("LLM Gateway initialized (disabled by default)")
+            logger.info("LLM Gateway initialized (enabled with fallback provider)")
         except Exception as e:
             logger.warning(f"LLM Gateway initialization failed: {e}")
         
