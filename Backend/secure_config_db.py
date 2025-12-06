@@ -72,22 +72,43 @@ class SecureConfigDatabase:
     
     async def _derive_master_key(self, biometric_hash: str) -> bytes:
         """Derive 256-bit master key from biometric hash using PBKDF2"""
-        # Use fixed salt stored in environment or generate on first run
+        # Use fixed salt stored in environment or file
         salt_key = "AARIA_CONFIG_SALT"
+        salt_file = os.path.join(os.path.dirname(self.db_path), ".aaria_salt")
+        
         salt = os.getenv(salt_key)
         
         if not salt:
-            # Generate new salt on first run
-            salt = base64.urlsafe_b64encode(os.urandom(32)).decode()
-            logger.warning(f"Generated new config salt. Set environment variable {salt_key}={salt}")
-        else:
-            # Decode existing salt
+            # Try to load from file
+            if os.path.exists(salt_file):
+                try:
+                    with open(salt_file, 'r') as f:
+                        salt = f.read().strip()
+                    logger.debug("Loaded salt from file")
+                except Exception as e:
+                    logger.error(f"Failed to read salt file: {e}")
+            
+            if not salt:
+                # Generate new salt on first run
+                salt = base64.urlsafe_b64encode(os.urandom(32)).decode()
+                logger.warning(f"Generated new config salt. Set environment variable {salt_key}={salt}")
+                
+                # Save to file for persistence
+                try:
+                    with open(salt_file, 'w') as f:
+                        f.write(salt)
+                    logger.info(f"Saved salt to {salt_file}")
+                except Exception as e:
+                    logger.error(f"Failed to save salt to file: {e}")
+        
+        # Decode salt if it's a string
+        if isinstance(salt, str):
             salt = base64.urlsafe_b64decode(salt.encode())
         
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA512(),
             length=32,  # 256 bits for AES-256
-            salt=salt if isinstance(salt, bytes) else salt.encode(),
+            salt=salt,
             iterations=310000,  # NIST recommendation
             backend=self.backend
         )
@@ -294,13 +315,15 @@ class SecureConfigDatabase:
             row = cursor.fetchone()
             
             if row is None:
+                logger.debug(f"Config {category}.{key} not found in database, using default: {default}")
                 return default
             
             encrypted_data, nonce, tag = row
-            return await self._decrypt_data(encrypted_data, nonce, tag)
+            decrypted_value = await self._decrypt_data(encrypted_data, nonce, tag)
+            return decrypted_value
             
         except Exception as e:
-            logger.error(f"Failed to get config {category}.{key}: {e}")
+            logger.error(f"Failed to get config {category}.{key}: {e}", exc_info=True)
             return default
     
     async def get_all_config(self, category: str) -> Dict[str, Any]:

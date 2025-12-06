@@ -267,8 +267,16 @@ class Mood:
             self.trend = "stable"
             return
         
-        avg_recent = sum(e.intensity for e in recent_emotions[:3]) / 3
-        avg_previous = sum(e.intensity for e in recent_emotions[3:]) / min(2, len(recent_emotions)-3)
+        # Calculate averages with safety checks for division by zero
+        recent_count = min(3, len(recent_emotions))
+        previous_count = len(recent_emotions) - recent_count
+        
+        if recent_count == 0 or previous_count == 0:
+            self.trend = "stable"
+            return
+        
+        avg_recent = sum(e.intensity for e in recent_emotions[:recent_count]) / recent_count
+        avg_previous = sum(e.intensity for e in recent_emotions[recent_count:]) / previous_count
         
         if avg_recent > avg_previous * 1.2:
             self.trend = "improving"

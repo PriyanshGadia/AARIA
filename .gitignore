@@ -26,6 +26,7 @@ Thumbs.db
 # AARIA Specific
 Backend/.aaria_config.db
 Backend/.test_aaria_config.db
+Backend/.aaria_salt
 *.log
 aaria_system.log
 
