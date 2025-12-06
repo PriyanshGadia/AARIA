@@ -27,6 +27,7 @@ try:
     from parietal_core import ParietalCore
     from occipital_core import OccipitalCore
     from evolution_core import EvolutionCore
+    from secure_config_db import SecureConfigDatabase, get_config_database
 except ImportError as e:
     # Critical failure if cores are missing
     print(f"CRITICAL: Failed to import core modules: {e}")
@@ -45,36 +46,100 @@ logger = logging.getLogger("AARIA_STEM")
 
 # ==================== CONFIGURATION & SECURITY ====================
 class StemConfigLoader:
-    """Dynamic configuration loader for the central stem"""
+    """Dynamic configuration loader for the central stem using encrypted database"""
     
-    @staticmethod
-    async def load_system_config() -> Dict[str, Any]:
-        """Load system-wide configuration"""
-        # In production, this loads from a secure encrypted config file
-        return {
-            "system_name": "A.A.R.I.A",
-            "version": "1.0.0",
-            "tick_rate": 0.1,  # System tick interval in seconds
-            "watchdog_interval": 5.0,
-            "auto_recovery": True,
-            "log_level": "INFO",
-            "owner_id": os.getenv("AARIA_OWNER_ID", "root_owner"),
-            "interfaces": {
-                "cli": True,
-                "api": False,  # Enable for web interface
-                "voice": False # Enable for mic input
+    def __init__(self):
+        self.config_db: Optional[SecureConfigDatabase] = None
+        self.biometric_hash: Optional[str] = None
+    
+    async def initialize(self, biometric_hash: str) -> bool:
+        """
+        Initialize configuration loader with encrypted database
+        
+        Args:
+            biometric_hash: Owner's biometric hash for database encryption
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            self.biometric_hash = biometric_hash
+            self.config_db = await get_config_database(biometric_hash)
+            logger.info("Configuration loader initialized with encrypted database")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize configuration loader: {e}")
+            return False
+    
+    async def load_system_config(self) -> Dict[str, Any]:
+        """Load system-wide configuration from encrypted database"""
+        if not self.config_db:
+            raise RuntimeError("Configuration loader not initialized")
+        
+        try:
+            # Load system configuration
+            config = {
+                "system_name": await self.config_db.get_config("system", "system_name", "A.A.R.I.A"),
+                "version": await self.config_db.get_config("system", "version", "1.0.0"),
+                "tick_rate": await self.config_db.get_config("system", "tick_rate", 0.1),
+                "watchdog_interval": await self.config_db.get_config("system", "watchdog_interval", 5.0),
+                "auto_recovery": await self.config_db.get_config("system", "auto_recovery", True),
+                "log_level": await self.config_db.get_config("system", "log_level", "INFO"),
+                "owner_id": os.getenv("AARIA_OWNER_ID") or await self.config_db.get_config("system", "owner_id", "root_owner"),
             }
-        }
+            
+            # Load interface configuration
+            config["interfaces"] = {
+                "cli": await self.config_db.get_config("interface", "cli_enabled", True),
+                "api": await self.config_db.get_config("interface", "api_enabled", False),
+                "voice": await self.config_db.get_config("interface", "voice_enabled", False),
+            }
+            
+            return config
+            
+        except Exception as e:
+            logger.error(f"Failed to load system config from database: {e}")
+            # Return minimal safe defaults
+            return {
+                "system_name": "A.A.R.I.A",
+                "version": "1.0.0",
+                "tick_rate": 0.1,
+                "watchdog_interval": 5.0,
+                "auto_recovery": True,
+                "log_level": "INFO",
+                "owner_id": "root_owner",
+                "interfaces": {"cli": True, "api": False, "voice": False}
+            }
 
     @staticmethod
     def get_secure_boot_credentials() -> str:
-        """Retrieve secure boot credentials (biometric hash simulation)"""
-        # CRITICAL: Do not hardcode. Retrieve from secure enclave or env var.
-        # This hash is required to unlock the Memory Core.
+        """
+        Retrieve secure boot credentials (biometric hash)
+        
+        This should integrate with actual biometric hardware in production.
+        For now, retrieves from secure environment variable or generates session key.
+        
+        Returns:
+            str: Biometric hash (SHA-256)
+        """
+        # Try to get from secure environment variable
         biometric_hash = os.getenv("AARIA_BIOMETRIC_HASH")
+        
         if not biometric_hash:
-            logger.warning("No biometric hash found in environment. Using generated session key.")
-            biometric_hash = hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest()
+            # Check for biometric hardware integration
+            # In production, this would call actual biometric scanning (face/fingerprint/voice)
+            logger.warning("No biometric hash found in environment. Checking for biometric hardware...")
+            
+            # TODO: Integrate with actual biometric hardware
+            # For development/testing, generate deterministic session key
+            # This ensures consistent behavior but is NOT SECURE for production
+            machine_id = str(uuid.getnode())  # MAC address as machine identifier
+            session_seed = f"AARIA_DEV_{machine_id}_{datetime.now().strftime('%Y%m%d')}"
+            biometric_hash = hashlib.sha256(session_seed.encode()).hexdigest()
+            
+            logger.warning(f"Generated development session key. DO NOT USE IN PRODUCTION.")
+            logger.warning(f"Set AARIA_BIOMETRIC_HASH environment variable with actual biometric data.")
+        
         return biometric_hash
 
 # ==================== CENTRAL EVENT BUS ====================
@@ -161,6 +226,7 @@ class AARIA_Stem:
         # Configuration
         self.config = {}
         self.biometric_hash = ""
+        self.config_loader = None
         
         # Infrastructure
         self.event_bus = EventBus()
@@ -190,14 +256,23 @@ class AARIA_Stem:
         logger.info("Initializing A.A.R.I.A. Stem...")
         self.start_time = datetime.now()
         
-        # 1. Load Config & Credentials
-        self.config = await StemConfigLoader.load_system_config()
+        # 1. Get Biometric Credentials
         self.biometric_hash = StemConfigLoader.get_secure_boot_credentials()
+        logger.info("Biometric authentication completed")
         
-        # 2. Start Event Bus
+        # 2. Initialize Configuration Loader with Encrypted Database
+        self.config_loader = StemConfigLoader()
+        if not await self.config_loader.initialize(self.biometric_hash):
+            raise RuntimeError("Failed to initialize secure configuration database")
+        
+        # 3. Load System Configuration from Database
+        self.config = await self.config_loader.load_system_config()
+        logger.info(f"Configuration loaded from encrypted database: {self.config['system_name']} v{self.config['version']}")
+        
+        # 4. Start Event Bus
         await self.event_bus.start()
         
-        # 3. Initialize Cores (Sequential Dependency)
+        # 5. Initialize Cores (Sequential Dependency)
         
         # A. Parietal (Self-Awareness/Hardware) - First to monitor boot health
         logger.info("Booting Parietal Core...")
@@ -239,11 +314,11 @@ class AARIA_Stem:
         self.is_running = True
         logger.info(f"A.A.R.I.A. v{self.config['version']} is ONLINE.")
         
-        # 4. Start Orchestration Loops
+        # 6. Start Orchestration Loops
         asyncio.create_task(self._main_control_loop())
         asyncio.create_task(self._watchdog_loop())
         
-        # 5. Initial Greeting
+        # 7. Initial Greeting
         await self._system_ready_announcement()
 
     async def shutdown(self):

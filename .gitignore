@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# AARIA Specific
+Backend/.aaria_config.db
+Backend/.test_aaria_config.db
+*.log
+aaria_system.log
+
+# NLTK Data (downloaded at runtime)
+nltk_data/
+
+# Sensitive Data
+*.key
+*.pem
+*.crt
+.env
