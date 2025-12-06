@@ -131,6 +131,7 @@ class LLMGateway:
     async def initialize(self, config: Dict[str, Any]) -> bool:
         """
         Initialize LLM Gateway with configuration
+        Auto-detects available providers based on environment variables and local services
         
         Args:
             config: LLM configuration dictionary
@@ -140,13 +141,98 @@ class LLMGateway:
         """
         try:
             self.enabled = config.get("enabled", False)
-            self.default_provider = LLMProvider[config.get("default_provider", "FALLBACK").upper()]
+            requested_provider = config.get("default_provider", "local").upper()
             self.providers_config = config.get("providers", {})
             
-            logger.info(f"LLM Gateway initialized: enabled={self.enabled}, default={self.default_provider.value}")
+            # Auto-detect available providers from environment variables and services
+            available_providers = {}
+            
+            # Check for local Ollama FIRST (preferred for privacy)
+            ollama_available = False
+            try:
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get("http://localhost:11434/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            models = data.get("models", [])
+                            model_names = [m.get("name", "") for m in models]
+                            available_providers["local"] = f"Ollama ({len(models)} models: {', '.join(model_names[:3])}{'...' if len(models) > 3 else ''})"
+                            ollama_available = True
+            except Exception as e:
+                logger.debug(f"Ollama not available: {e}")
+            
+            # Check for cloud API keys
+            if os.getenv("GEMINI_API_KEY"):
+                available_providers["gemini"] = "Google Gemini (gemini-pro)"
+            
+            if os.getenv("GROQ_API_KEY"):
+                available_providers["groq"] = "Groq (llama3-70b-8192, ultra-fast)"
+            
+            if os.getenv("OPENAI_API_KEY"):
+                available_providers["openai"] = "OpenAI (gpt-3.5-turbo / gpt-4)"
+            
+            if os.getenv("ANTHROPIC_API_KEY"):
+                available_providers["anthropic"] = "Anthropic (claude-3)"
+            
+            # Determine which provider to use
+            if requested_provider == "LOCAL":
+                if ollama_available:
+                    self.default_provider = LLMProvider.LOCAL
+                    logger.info(f"Using LOCAL Ollama as requested: {available_providers['local']}")
+                elif available_providers:
+                    # Ollama requested but not available, try cloud providers
+                    if "gemini" in available_providers:
+                        self.default_provider = LLMProvider.GEMINI
+                        logger.info("Ollama not available, switching to Gemini (API key found)")
+                    elif "groq" in available_providers:
+                        self.default_provider = LLMProvider.GROQ
+                        logger.info("Ollama not available, switching to Groq (API key found)")
+                    elif "openai" in available_providers:
+                        self.default_provider = LLMProvider.OPENAI
+                        logger.info("Ollama not available, switching to OpenAI (API key found)")
+                    elif "anthropic" in available_providers:
+                        self.default_provider = LLMProvider.ANTHROPIC
+                        logger.info("Ollama not available, switching to Anthropic (API key found)")
+                else:
+                    self.default_provider = LLMProvider.FALLBACK
+                    logger.warning("LOCAL requested but Ollama not available, no API keys found")
+            else:
+                # Specific provider requested
+                provider_lower = requested_provider.lower()
+                if provider_lower in available_providers:
+                    self.default_provider = LLMProvider[requested_provider]
+                    logger.info(f"Using {requested_provider}: {available_providers[provider_lower]}")
+                else:
+                    # Requested provider not available, find alternative
+                    if ollama_available:
+                        self.default_provider = LLMProvider.LOCAL
+                        logger.info(f"{requested_provider} not available, using LOCAL Ollama instead")
+                    elif available_providers:
+                        # Use first available cloud provider
+                        first_provider = list(available_providers.keys())[0]
+                        self.default_provider = LLMProvider[first_provider.upper()]
+                        logger.info(f"{requested_provider} not available, using {first_provider}: {available_providers[first_provider]}")
+                    else:
+                        self.default_provider = LLMProvider.FALLBACK
+                        logger.warning(f"{requested_provider} not available, no alternatives found")
+            
+            if available_providers:
+                logger.info(f"LLM Gateway initialized: enabled={self.enabled}, default={self.default_provider.value}")
+                logger.info(f"Available providers: {', '.join([f'{k}: {v}' for k, v in available_providers.items()])}")
+            else:
+                logger.warning("⚠️  NO AI PROVIDERS AVAILABLE - FALLBACK MODE ONLY")
+                logger.warning("Install Ollama OR set an API key:")
+                logger.warning("  • Ollama (FREE, local): curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest")
+                logger.warning("  • Gemini (FREE tier): export GEMINI_API_KEY='your-key'")
+                logger.warning("  • Groq (fast, cheap): export GROQ_API_KEY='your-key'")
+                logger.warning("  • OpenAI: export OPENAI_API_KEY='your-key'")
+                logger.warning("  • Anthropic: export ANTHROPIC_API_KEY='your-key'")
+                self.default_provider = LLMProvider.FALLBACK
+            
             return True
         except Exception as e:
-            logger.error(f"Failed to initialize LLM Gateway: {e}")
+            logger.error(f"Failed to initialize LLM Gateway: {e}", exc_info=True)
             return False
     
     async def generate_response(self, request: LLMRequest) -> LLMResponse:
