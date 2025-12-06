@@ -1,0 +1,40 @@
+# AARIA - Advanced Autonomous Responsive Intelligent Assistant
+# Python Dependencies - v1.0
+# No external paid services - all open source
+
+# Core Dependencies
+numpy>=1.24.0
+asyncio>=3.4.3
+
+# Encryption & Security
+cryptography>=41.0.0
+
+# Database
+sqlite3; python_version >= '3.0'
+
+# Optional: ML & NLP (can be added later)
+# torch>=2.0.0  # For local ML models
+# transformers>=4.30.0  # For Llama/local LLM
+# sentence-transformers>=2.2.0  # For embeddings
+
+# Optional: Audio Processing
+# pyaudio>=0.2.13  # For voice input
+# SpeechRecognition>=3.10.0  # For STT
+# pyttsx3>=2.90  # For TTS
+
+# Optional: Computer Vision
+# opencv-python>=4.8.0  # For visual processing
+# pillow>=10.0.0  # For image handling
+
+# Optional: System Control
+# pyautogui>=0.9.54  # For desktop automation
+# selenium>=4.10.0  # For browser automation
+
+# Optional: Communication APIs
+# twilio>=8.5.0  # For telephony (requires account)
+# python-telegram-bot>=20.4  # For Telegram
+# requests>=2.31.0  # For API calls
+
+# Development & Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
