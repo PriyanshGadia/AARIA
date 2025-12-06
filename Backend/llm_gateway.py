@@ -20,9 +20,11 @@ logger = logging.getLogger(__name__)
 # ==================== LLM PROVIDER TYPES ====================
 class LLMProvider(Enum):
     """Supported LLM providers"""
-    LOCAL = "local"           # Local models (Ollama, LLaMA)
+    LOCAL = "local"           # Local models (Ollama, LLaMA, llama3:latest)
     OPENAI = "openai"         # OpenAI GPT models
     ANTHROPIC = "anthropic"   # Claude models
+    GEMINI = "gemini"         # Google Gemini models
+    GROQ = "groq"             # Groq (fast inference)
     AZURE = "azure"           # Azure OpenAI
     FALLBACK = "fallback"     # Simple rule-based fallback
 
@@ -181,6 +183,10 @@ class LLMGateway:
                 return await self._openai_llm(request)
             elif request.provider == LLMProvider.ANTHROPIC:
                 return await self._anthropic_llm(request)
+            elif request.provider == LLMProvider.GEMINI:
+                return await self._gemini_llm(request)
+            elif request.provider == LLMProvider.GROQ:
+                return await self._groq_llm(request)
             else:
                 return await self._fallback_llm(request)
                 
@@ -190,13 +196,13 @@ class LLMGateway:
             return await self._fallback_llm(request)
     
     async def _local_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using local LLM (Ollama)"""
+        """Generate response using local LLM (Ollama with llama2, llama3:latest, etc.)"""
         try:
             import aiohttp
             
             ollama_config = self.providers_config.get("local", {})
             endpoint = ollama_config.get("endpoint", "http://localhost:11434")
-            model = ollama_config.get("model", "llama2")
+            model = ollama_config.get("model", "llama3:latest")  # Default to llama3:latest
             
             # Prepare request
             payload = {
@@ -359,6 +365,153 @@ class LLMGateway:
             logger.warning(f"Anthropic LLM failed: {e}. Using fallback.")
             return await self._fallback_llm(request)
     
+    async def _gemini_llm(self, request: LLMRequest) -> LLMResponse:
+        """Generate response using Google Gemini API"""
+        try:
+            import aiohttp
+            
+            gemini_config = self.providers_config.get("gemini", {})
+            api_key = os.getenv("GEMINI_API_KEY") or gemini_config.get("api_key")
+            model = gemini_config.get("model", "gemini-pro")
+            
+            if not api_key:
+                logger.warning("Gemini API key not found, using fallback")
+                return await self._fallback_llm(request)
+            
+            # Prepare request for Gemini
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": request.prompt}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": request.temperature,
+                    "maxOutputTokens": request.max_tokens,
+                }
+            }
+            
+            # Add system instruction if provided
+            if request.system_prompt:
+                payload["systemInstruction"] = {
+                    "parts": [{"text": request.system_prompt}]
+                }
+            
+            # Make request to Gemini
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+                    json=payload,
+                    timeout=30
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # Extract text from response
+                        candidates = data.get("candidates", [])
+                        if candidates and len(candidates) > 0:
+                            content = candidates[0].get("content", {})
+                            parts = content.get("parts", [])
+                            text = parts[0].get("text", "") if parts else ""
+                            
+                            # Get token usage
+                            usage = data.get("usageMetadata", {})
+                            tokens = usage.get("totalTokenCount", 0)
+                            
+                            # Update token usage
+                            self.token_usage["total"] += tokens
+                            self.token_usage["today"] += tokens
+                            
+                            return LLMResponse(
+                                text=text,
+                                provider="gemini",
+                                tokens_used=tokens,
+                                confidence=0.9,
+                                metadata={"model": model, "finish_reason": candidates[0].get("finishReason")}
+                            )
+                        else:
+                            logger.error("Gemini returned no candidates")
+                            return await self._fallback_llm(request)
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Gemini request failed: {response.status} - {error_text}")
+                        return await self._fallback_llm(request)
+                        
+        except Exception as e:
+            logger.warning(f"Gemini LLM failed: {e}. Using fallback.")
+            return await self._fallback_llm(request)
+    
+    async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
+        """Generate response using Groq API (ultra-fast inference)"""
+        try:
+            import aiohttp
+            
+            groq_config = self.providers_config.get("groq", {})
+            api_key = os.getenv("GROQ_API_KEY") or groq_config.get("api_key")
+            model = groq_config.get("model", "llama3-70b-8192")
+            
+            if not api_key:
+                logger.warning("Groq API key not found, using fallback")
+                return await self._fallback_llm(request)
+            
+            # Prepare messages (Groq uses OpenAI-compatible API)
+            messages = []
+            if request.system_prompt:
+                messages.append({"role": "system", "content": request.system_prompt})
+            messages.append({"role": "user", "content": request.prompt})
+            
+            # Prepare request
+            payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": request.max_tokens,
+                "temperature": request.temperature
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Make request to Groq
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=30
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        choice = data["choices"][0]
+                        tokens = data.get("usage", {}).get("total_tokens", 0)
+                        
+                        # Update token usage
+                        self.token_usage["total"] += tokens
+                        self.token_usage["today"] += tokens
+                        
+                        return LLMResponse(
+                            text=choice["message"]["content"],
+                            provider="groq",
+                            tokens_used=tokens,
+                            confidence=0.9,
+                            metadata={
+                                "model": model, 
+                                "finish_reason": choice.get("finish_reason"),
+                                "performance": "ultra_fast"
+                            }
+                        )
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Groq request failed: {response.status} - {error_text}")
+                        return await self._fallback_llm(request)
+                        
+        except Exception as e:
+            logger.warning(f"Groq LLM failed: {e}. Using fallback.")
+            return await self._fallback_llm(request)
+    
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
         """
         MINIMAL FALLBACK - NOT REAL AI
@@ -368,10 +521,14 @@ class LLMGateway:
         
         TO ENABLE REAL AI:
         1. Install Ollama: curl https://ollama.ai/install.sh | sh
-        2. Pull a model: ollama pull llama2
+        2. Pull a model: ollama pull llama3:latest
         3. Restart AARIA
         
-        OR use cloud LLM: export OPENAI_API_KEY='your-key'
+        OR use cloud LLM: 
+        - OpenAI: export OPENAI_API_KEY='your-key'
+        - Anthropic: export ANTHROPIC_API_KEY='your-key'
+        - Gemini: export GEMINI_API_KEY='your-key'
+        - Groq: export GROQ_API_KEY='your-key'
         """
         
         # Extract basic information without hardcoding responses
@@ -383,8 +540,12 @@ class LLMGateway:
             f"[NO LLM ACTIVE] I detected your message (intent: {intent}). "
             "However, I'm currently operating without a language model, so I cannot provide intelligent responses. "
             "\n\nTO ENABLE REAL AI RESPONSES:\n"
-            "• Install Ollama (FREE, LOCAL): curl https://ollama.ai/install.sh | sh && ollama pull llama2\n"
-            "• Or use Cloud AI (PAID): export OPENAI_API_KEY='your-key'\n"
+            "• Install Ollama (FREE, LOCAL): curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest\n"
+            "• Or use Cloud AI (PAID):\n"
+            "  - OpenAI: export OPENAI_API_KEY='your-key'\n"
+            "  - Anthropic Claude: export ANTHROPIC_API_KEY='your-key'\n"
+            "  - Google Gemini: export GEMINI_API_KEY='your-key'\n"
+            "  - Groq (ultra-fast): export GROQ_API_KEY='your-key'\n"
             "\nWithout an LLM, I can only detect intent and entities, not generate meaningful responses."
         )
         
@@ -397,7 +558,8 @@ class LLMGateway:
                 "type": "placeholder_not_ai",
                 "intent": intent,
                 "warning": "NO LANGUAGE MODEL - Install Ollama or enable cloud LLM",
-                "instructions": "curl https://ollama.ai/install.sh | sh && ollama pull llama2"
+                "instructions": "curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest",
+                "supported_providers": ["local_ollama", "openai", "anthropic", "gemini", "groq"]
             }
         )
     

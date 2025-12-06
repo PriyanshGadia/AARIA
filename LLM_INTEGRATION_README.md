@@ -7,16 +7,28 @@ AARIA now includes a flexible LLM (Large Language Model) Gateway that allows int
 ## Features
 
 ✅ **Privacy-First Architecture** - Automatic PII filtering before cloud calls  
-✅ **Multi-Provider Support** - OpenAI, Anthropic, Ollama (local), and fallback  
+✅ **Multi-Provider Support** - OpenAI, Anthropic, Gemini, Groq, Ollama (local), and fallback  
 ✅ **Seamless Fallback** - Works without LLM, gracefully degrades  
 ✅ **Token Usage Tracking** - Monitor costs and usage  
 ✅ **Personality Integration** - Responses reflect AARIA's personality traits  
+✅ **llama3:latest Support** - Latest LLaMA 3 models via Ollama
+
+## Supported Providers
+
+| Provider | Type | Privacy | Speed | Cost | Recommended For |
+|----------|------|---------|-------|------|-----------------|
+| **Ollama (Local)** | Local | 🔒 Private | Medium | Free | Default, privacy-focused |
+| **Groq** | Cloud | ⚠️ Public | 🚀 Ultra-fast | Low | Speed-critical tasks |
+| **OpenAI** | Cloud | ⚠️ Public | Fast | Medium | General purpose |
+| **Anthropic Claude** | Cloud | ⚠️ Public | Medium | Medium | Complex reasoning |
+| **Google Gemini** | Cloud | ⚠️ Public | Fast | Low | Multi-modal tasks |
+| **Fallback** | Local | 🔒 Private | Instant | Free | No LLM available |
 
 ## Quick Start
 
 ### Option 1: Use Fallback (Default - No Setup Required)
 
-AARIA works out of the box with rule-based responses. No configuration needed.
+AARIA works out of the box with minimal responses. No configuration needed.
 
 ```bash
 python Backend/stem.py
@@ -31,47 +43,57 @@ curl https://ollama.ai/install.sh | sh
 
 2. Pull a model:
 ```bash
+# Recommended - Latest LLaMA 3 (best quality)
+ollama pull llama3:latest
+
+# Alternative options:
 ollama pull llama2
-# or for better quality:
 ollama pull mistral
+ollama pull mixtral
 ```
 
-3. Enable in code (edit stem.py around line 328):
-```python
-llm_config = {
-    "enabled": True,  # Change to True
-    "default_provider": "local",  # Use local Ollama
-    "providers": {
-        "local": {
-            "endpoint": "http://localhost:11434",
-            "model": "llama2"  # or "mistral"
-        }
-    }
-}
-```
+3. AARIA will auto-detect Ollama on startup. No code changes needed!
 
-### Option 3: Enable Cloud LLM (OpenAI/Anthropic)
+### Option 3: Enable Cloud LLM
 
-1. Set API key as environment variable:
+Set API key as environment variable:
+
 ```bash
 # For OpenAI:
 export OPENAI_API_KEY="your-api-key-here"
 
-# For Anthropic:
+# For Anthropic Claude:
 export ANTHROPIC_API_KEY="your-api-key-here"
+
+# For Google Gemini:
+export GEMINI_API_KEY="your-api-key-here"
+
+# For Groq (ultra-fast):
+export GROQ_API_KEY="your-api-key-here"
 ```
 
-2. Enable in code (edit stem.py around line 328):
+Then edit `stem.py` (around line 328) to change default provider:
+
 ```python
 llm_config = {
     "enabled": True,
-    "default_provider": "openai",  # or "anthropic"
+    "default_provider": "gemini",  # or "openai", "anthropic", "groq", "local"
     "providers": {
+        "local": {
+            "endpoint": "http://localhost:11434",
+            "model": "llama3:latest"
+        },
         "openai": {
             "model": "gpt-3.5-turbo"  # or "gpt-4"
         },
         "anthropic": {
             "model": "claude-3-sonnet-20240229"
+        },
+        "gemini": {
+            "model": "gemini-pro"
+        },
+        "groq": {
+            "model": "llama3-70b-8192"  # ultra-fast LLaMA 3
         }
     }
 }
@@ -157,6 +179,12 @@ print(response.text)
 
 ### Cloud LLMs
 
+**Groq (Ultra-Fast):**
+- LLaMA 3 70B: $0.59 per 1M input tokens, $0.79 per 1M output tokens
+- LLaMA 3 8B: $0.05 per 1M input tokens, $0.08 per 1M output tokens
+- ~100 conversations/day with 70B = ~$0.14/month
+- **⚡ Fastest option - 10x faster than GPT-4**
+
 **OpenAI GPT-3.5-Turbo:**
 - Input: $0.50 per 1M tokens
 - Output: $1.50 per 1M tokens
@@ -167,14 +195,19 @@ print(response.text)
 - Output: $30 per 1M tokens
 - ~100 conversations/day = ~$4/month
 
-**Anthropic Claude 3:**
+**Anthropic Claude 3 Sonnet:**
 - Input: $3 per 1M tokens
 - Output: $15 per 1M tokens
 - ~100 conversations/day = ~$1.80/month
 
+**Google Gemini Pro:**
+- Input: $0.50 per 1M tokens (first 1M free)
+- Output: $1.50 per 1M tokens (first 1M free)
+- ~100 conversations/day = ~$0.20/month (or FREE under quota)
+
 ### Local LLMs (Free)
 
-**Ollama with LLaMA 2 / Mistral:**
+**Ollama with LLaMA 3 / LLaMA 2 / Mistral:**
 - No API costs
 - Requires GPU (RTX 3060 12GB minimum recommended)
 - One-time hardware cost only

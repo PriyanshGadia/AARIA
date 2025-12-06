@@ -324,10 +324,19 @@ class AARIA_Stem:
                 "providers": {
                     "local": {
                         "endpoint": "http://localhost:11434",
-                        "model": "llama2"
+                        "model": "llama3:latest"  # Default to llama3:latest
                     },
                     "openai": {
                         "model": "gpt-3.5-turbo"
+                    },
+                    "anthropic": {
+                        "model": "claude-3-sonnet-20240229"
+                    },
+                    "gemini": {
+                        "model": "gemini-pro"
+                    },
+                    "groq": {
+                        "model": "llama3-70b-8192"
                     }
                 }
             }
@@ -346,20 +355,23 @@ class AARIA_Stem:
                 async with aiohttp.ClientSession() as session:
                     async with session.get("http://localhost:11434/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
                         if response.status == 200:
-                            logger.info("LLM Gateway initialized with LOCAL Ollama")
+                            logger.info("LLM Gateway initialized with LOCAL Ollama (llama3:latest recommended)")
                         else:
                             logger.warning("Ollama not responding - falling back to minimal NLP")
                             logger.warning("⚠️  INSTALL OLLAMA FOR REAL AI: curl https://ollama.ai/install.sh | sh")
-                            logger.warning("⚠️  THEN RUN: ollama pull llama2")
+                            logger.warning("⚠️  THEN RUN: ollama pull llama3:latest")
                             llm_gateway.enabled = True  # Keep enabled to show warnings
                             llm_gateway.default_provider = LLMProvider.FALLBACK
             except Exception as e:
                 logger.warning(f"No local LLM available: {e}")
                 logger.warning("⚠️  FOR INTELLIGENT AI RESPONSES:")
                 logger.warning("⚠️  Option 1: Install Ollama (FREE, LOCAL, PRIVATE)")
-                logger.warning("⚠️    curl https://ollama.ai/install.sh | sh && ollama pull llama2")
+                logger.warning("⚠️    curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest")
                 logger.warning("⚠️  Option 2: Use Cloud LLM (PAID)")
-                logger.warning("⚠️    export OPENAI_API_KEY='your-key'")
+                logger.warning("⚠️    - OpenAI: export OPENAI_API_KEY='your-key'")
+                logger.warning("⚠️    - Anthropic Claude: export ANTHROPIC_API_KEY='your-key'")
+                logger.warning("⚠️    - Google Gemini: export GEMINI_API_KEY='your-key'")
+                logger.warning("⚠️    - Groq (ultra-fast): export GROQ_API_KEY='your-key'")
                 llm_gateway.enabled = True
                 llm_gateway.default_provider = LLMProvider.FALLBACK
                 
