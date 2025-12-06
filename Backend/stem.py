@@ -28,6 +28,7 @@ try:
     from occipital_core import OccipitalCore
     from evolution_core import EvolutionCore
     from secure_config_db import SecureConfigDatabase, get_config_database
+    from llm_gateway import LLMRequest, LLMProvider, PrivacyLevel
 except ImportError as e:
     # Critical failure if cores are missing
     print(f"CRITICAL: Failed to import core modules: {e}")
@@ -311,15 +312,15 @@ class AARIA_Stem:
             logger.warning("Evolution Core failed. Self-growth disabled.")
         self.event_bus.subscribe("evolution", self._handle_evolution_event)
         
-        # G. Initialize LLM Gateway (Optional Enhancement)
+        # G. Initialize LLM Gateway (REQUIRES ACTUAL LLM FOR INTELLIGENCE)
         try:
             from llm_gateway import get_llm_gateway
             llm_gateway = await get_llm_gateway()
             
-            # Initialize with default config (ENABLED by default with fallback provider)
+            # Check for Ollama or Cloud LLM availability
             llm_config = {
-                "enabled": True,  # Enable LLM for better responses
-                "default_provider": "fallback",  # Use intelligent fallback by default
+                "enabled": True,
+                "default_provider": "local",  # Try local Ollama first
                 "providers": {
                     "local": {
                         "endpoint": "http://localhost:11434",
@@ -331,9 +332,39 @@ class AARIA_Stem:
                 }
             }
             await llm_gateway.initialize(llm_config)
-            logger.info("LLM Gateway initialized (enabled with fallback provider)")
+            
+            # Check if real LLM is available
+            test_request = LLMRequest(
+                prompt="test",
+                provider=LLMProvider.LOCAL,
+                privacy_level=PrivacyLevel.PUBLIC
+            )
+            
+            try:
+                # Try to connect to Ollama
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get("http://localhost:11434/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
+                        if response.status == 200:
+                            logger.info("LLM Gateway initialized with LOCAL Ollama")
+                        else:
+                            logger.warning("Ollama not responding - falling back to minimal NLP")
+                            logger.warning("⚠️  INSTALL OLLAMA FOR REAL AI: curl https://ollama.ai/install.sh | sh")
+                            logger.warning("⚠️  THEN RUN: ollama pull llama2")
+                            llm_gateway.enabled = True  # Keep enabled to show warnings
+                            llm_gateway.default_provider = LLMProvider.FALLBACK
+            except Exception as e:
+                logger.warning(f"No local LLM available: {e}")
+                logger.warning("⚠️  FOR INTELLIGENT AI RESPONSES:")
+                logger.warning("⚠️  Option 1: Install Ollama (FREE, LOCAL, PRIVATE)")
+                logger.warning("⚠️    curl https://ollama.ai/install.sh | sh && ollama pull llama2")
+                logger.warning("⚠️  Option 2: Use Cloud LLM (PAID)")
+                logger.warning("⚠️    export OPENAI_API_KEY='your-key'")
+                llm_gateway.enabled = True
+                llm_gateway.default_provider = LLMProvider.FALLBACK
+                
         except Exception as e:
-            logger.warning(f"LLM Gateway initialization failed: {e}")
+            logger.error(f"LLM Gateway initialization failed: {e}")
         
         self.is_running = True
         logger.info(f"A.A.R.I.A. v{self.config['version']} is ONLINE.")

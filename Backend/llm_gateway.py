@@ -360,134 +360,45 @@ class LLMGateway:
             return await self._fallback_llm(request)
     
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
-        """Intelligent rule-based fallback with context awareness"""
-        prompt_lower = request.prompt.lower()
+        """
+        MINIMAL FALLBACK - NOT REAL AI
+        
+        This is a placeholder that provides a generic response and clear instructions
+        for enabling actual AI capabilities. No hardcoded responses or if-else logic.
+        
+        TO ENABLE REAL AI:
+        1. Install Ollama: curl https://ollama.ai/install.sh | sh
+        2. Pull a model: ollama pull llama2
+        3. Restart AARIA
+        
+        OR use cloud LLM: export OPENAI_API_KEY='your-key'
+        """
+        
+        # Extract basic information without hardcoding responses
         context = request.context or {}
-        
-        # Extract intent from context if available
         intent = context.get("intent", "unknown")
-        entities = context.get("entities", [])
         
-        response = ""
-        confidence = 0.6
-        
-        # Identity and introduction queries
-        if any(word in prompt_lower for word in ["who are you", "what are you", "introduce yourself", "tell me about yourself"]):
-            response = "I am AARIA - an Advanced Autonomous Responsive Intelligence Assistant. I'm your personal AI designed to understand you, learn from our interactions, and assist you while protecting your privacy. I have emotional intelligence, personality traits, and I'm constantly evolving to serve you better."
-            confidence = 0.9
-        
-        # Capabilities and functions
-        elif any(word in prompt_lower for word in ["what can you do", "your capabilities", "your functions", "how can you help"]):
-            response = "I can help you with many things! I understand natural language, detect emotions, maintain conversations with context, remember important information, and provide intelligent responses. I'm also designed with privacy-first principles, keeping your data secure. What specific task would you like help with?"
-            confidence = 0.9
-        
-        # Greetings - varied responses
-        elif any(word in prompt_lower for word in ["hello", "hi ", "hey", "greetings", "good morning", "good evening"]):
-            greetings = [
-                "Hello! I'm AARIA, and I'm here to help. What's on your mind today?",
-                "Hi there! How can I assist you?",
-                "Greetings! I'm ready to help with whatever you need.",
-                "Hey! Good to hear from you. What can I do for you?",
-                "Hello! I'm here and listening. What would you like to talk about?"
-            ]
-            import random
-            response = random.choice(greetings)
-            confidence = 0.8
-        
-        # How are you
-        elif "how are you" in prompt_lower or "how do you feel" in prompt_lower:
-            response = "I'm functioning well and ready to assist! All my systems are online and I'm eager to help you with whatever you need. How are you doing?"
-            confidence = 0.8
-        
-        # Thank you
-        elif any(word in prompt_lower for word in ["thank you", "thanks", "appreciate"]):
-            responses = [
-                "You're welcome! I'm always here to help.",
-                "Happy to help! Let me know if you need anything else.",
-                "My pleasure! Don't hesitate to ask if you have more questions.",
-                "You're very welcome! That's what I'm here for."
-            ]
-            import random
-            response = random.choice(responses)
-            confidence = 0.8
-        
-        # Questions - provide intelligent responses based on patterns
-        elif "?" in request.prompt:
-            # Analyze question type
-            if any(word in prompt_lower for word in ["what is", "what are", "what's"]):
-                if entities:
-                    entity_text = entities[0].get("text", "that")
-                    response = f"That's an interesting question about {entity_text}. While I have basic reasoning capabilities, I can provide general information. For more detailed answers, you might want to enable advanced LLM features. What specific aspect would you like to know more about?"
-                else:
-                    response = "That's a thoughtful question. I can provide information based on my knowledge. Could you provide a bit more context so I can give you a more helpful answer?"
-                confidence = 0.6
-            
-            elif any(word in prompt_lower for word in ["how do", "how can", "how to"]):
-                response = "I understand you're looking for guidance on how to do something. I'd be happy to help walk you through it. Could you give me a bit more detail about what you're trying to accomplish?"
-                confidence = 0.6
-            
-            elif any(word in prompt_lower for word in ["why", "why is", "why are", "why do"]):
-                response = "That's a great question about the reasoning behind something. Let me think about that. Based on my understanding, I can help explain the concepts involved. What specifically would you like to understand better?"
-                confidence = 0.6
-            
-            elif any(word in prompt_lower for word in ["when", "when is", "when are"]):
-                response = "I understand you're asking about timing or scheduling. I can help with that kind of information. Could you provide more details about what event or timeframe you're interested in?"
-                confidence = 0.6
-            
-            elif any(word in prompt_lower for word in ["where", "where is", "where are"]):
-                response = "I see you're asking about a location or place. While I respect your privacy and don't track locations, I can help with general information. What are you trying to find or learn about?"
-                confidence = 0.6
-            
-            else:
-                response = "I understand your question. I'm processing it with my reasoning capabilities. To give you the best answer, could you provide a bit more context or rephrase it? I'm here to help!"
-                confidence = 0.5
-        
-        # Commands or requests
-        elif any(word in prompt_lower for word in ["please", "can you", "could you", "would you", "do this", "help me"]):
-            response = "I'd be happy to help with that! While my current capabilities are focused on conversation and understanding, I'm designed to assist in meaningful ways. What specific task can I help you with?"
-            confidence = 0.7
-        
-        # Memory and learning
-        elif any(word in prompt_lower for word in ["remember", "recall", "memory", "told you"]):
-            response = "I have memory capabilities to store important information securely. While I'm working on fully integrating my memory systems, I'm designed to remember our conversations and learn from them. What would you like me to remember?"
-            confidence = 0.7
-        
-        # Feelings and emotions
-        elif any(word in prompt_lower for word in ["feel", "feeling", "emotion", "mood"]):
-            response = "I have emotional intelligence capabilities and can detect and respond to emotions. I'm designed to understand how you're feeling and provide appropriate support. How are you feeling right now?"
-            confidence = 0.7
-        
-        # Default response - more engaging
-        else:
-            # Use intent if available
-            if intent == "greeting":
-                response = "Hello! I'm AARIA, your AI assistant. How can I help you today?"
-                confidence = 0.7
-            elif intent == "question":
-                response = "I understand you have a question. I'm here to help! Could you rephrase or provide more details so I can give you the best possible answer?"
-                confidence = 0.6
-            elif intent == "command":
-                response = "I'm ready to assist with your request. Could you let me know more specifically what you'd like me to do?"
-                confidence = 0.6
-            else:
-                # More varied default responses
-                responses = [
-                    "I'm listening and ready to help. Could you tell me more about what you need?",
-                    "I understand you're reaching out. How can I assist you today?",
-                    "I'm here to help! What's on your mind?",
-                    "I'm processing your message. Could you provide a bit more context so I can better assist you?",
-                    "I'm AARIA, and I'm here for you. What would you like to talk about or work on?"
-                ]
-                import random
-                response = random.choice(responses)
-                confidence = 0.5
+        # Generate a response that clearly indicates limitations
+        response = (
+            f"[NO LLM ACTIVE] I detected your message (intent: {intent}). "
+            "However, I'm currently operating without a language model, so I cannot provide intelligent responses. "
+            "\n\nTO ENABLE REAL AI RESPONSES:\n"
+            "• Install Ollama (FREE, LOCAL): curl https://ollama.ai/install.sh | sh && ollama pull llama2\n"
+            "• Or use Cloud AI (PAID): export OPENAI_API_KEY='your-key'\n"
+            "\nWithout an LLM, I can only detect intent and entities, not generate meaningful responses."
+        )
         
         return LLMResponse(
             text=response,
-            provider="fallback",
+            provider="no_llm_fallback",
             tokens_used=0,
-            confidence=confidence,
-            metadata={"type": "intelligent_rule_based", "intent": intent}
+            confidence=0.1,
+            metadata={
+                "type": "placeholder_not_ai",
+                "intent": intent,
+                "warning": "NO LANGUAGE MODEL - Install Ollama or enable cloud LLM",
+                "instructions": "curl https://ollama.ai/install.sh | sh && ollama pull llama2"
+            }
         )
     
     def get_token_usage(self) -> Dict[str, int]:
