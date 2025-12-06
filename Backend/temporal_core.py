@@ -18,6 +18,9 @@ from abc import ABC, abstractmethod
 import random
 import re
 
+# Configure logger for this module
+logger = logging.getLogger(__name__)
+
 # ==================== SECURITY PROTOCOL ====================
 class SecurityViolation(Exception):
     """Custom exception for security breaches"""
@@ -394,7 +397,12 @@ class NaturalLanguageProcessor:
             "Let me assist you with this matter. "
         ]
         
-        return random.choice(empathy_phrases) + text
+        # Add proper spacing if text doesn't end with punctuation
+        prefix = random.choice(empathy_phrases)
+        if not text[0].isupper() if text else False:
+            text = text.capitalize()
+        
+        return prefix + text
 
 # ==================== TEMPORAL CORE MAIN CLASS ====================
 class TemporalCore:

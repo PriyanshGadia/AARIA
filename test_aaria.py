@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import sys
+import re
 from pathlib import Path
 
 # Add Backend to path
@@ -348,25 +349,32 @@ class TestSecurity:
         # This test reads source files and checks for common credential patterns
         backend_path = Path(__file__).parent / 'Backend'
         
+        # Expanded patterns to catch more variants
         dangerous_patterns = [
-            'password = "',
-            'api_key = "',
-            'secret = "',
-            'token = "'
+            r'password\s*=\s*["\'](?!None|""|$)',
+            r'passwd\s*=\s*["\'](?!None|""|$)',
+            r'api_key\s*=\s*["\'](?!None|""|$)',
+            r'secret\s*=\s*["\'](?!None|""|$)',
+            r'token\s*=\s*["\'](?!None|""|$)',
+            r'auth_token\s*=\s*["\'](?!None|""|$)',
+            r'api_secret\s*=\s*["\'](?!None|""|$)'
         ]
         
         for py_file in backend_path.glob('*.py'):
             content = py_file.read_text()
-            for pattern in dangerous_patterns:
-                # Allow configuration examples but not actual values
-                if pattern in content:
-                    # Check if it's in a comment or example
-                    lines = content.split('\n')
-                    for line in lines:
-                        if pattern in line and not line.strip().startswith('#'):
-                            # Further check - should be None or empty
-                            if '= "' in line and not ('None' in line or '= ""' in line or 'encrypted' in line):
-                                pytest.fail(f"Potential hardcoded credential in {py_file}: {line}")
+            lines = content.split('\n')
+            
+            for i, line in enumerate(lines, 1):
+                # Skip comments and docstrings
+                stripped = line.strip()
+                if stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
+                    continue
+                
+                for pattern in dangerous_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        # Further verification - check for None, empty string, or encrypted suffix
+                        if not any(safe in line for safe in ['None', '""', "''", 'encrypted', 'config.get', 'passphrase']):
+                            pytest.fail(f"Potential hardcoded credential in {py_file}:{i}: {line.strip()}")
     
     @pytest.mark.asyncio
     async def test_encryption_strength(self):

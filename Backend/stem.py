@@ -572,10 +572,14 @@ class STEM:
     async def _initialize_cores(self):
         """Initialize all enabled cores"""
         try:
-            # Import core modules
-            from frontal_core import initialize_frontal_core
-            from memory_core import initialize_memory_core
-            from temporal_core import initialize_temporal_core
+            # Import core modules with error handling
+            try:
+                from frontal_core import initialize_frontal_core
+                from memory_core import initialize_memory_core, DataClassification
+                from temporal_core import initialize_temporal_core
+            except ImportError as e:
+                logging.error(f"Failed to import core modules: {str(e)}")
+                raise RuntimeError(f"Core module import failed: {str(e)}")
             
             # Owner verification callback
             async def owner_verification():
@@ -717,7 +721,8 @@ class STEM:
             elif request_type == "memory_store":
                 # Process through Memory Core
                 from memory_core import DataClassification
-                classification = DataClassification(request.get("classification", "owner_confidential"))
+                classification_str = request.get("classification", "owner_confidential")
+                classification = DataClassification(classification_str)
                 result = await self.memory_core.store_memory(
                     request.get("key", ""),
                     request.get("value"),
