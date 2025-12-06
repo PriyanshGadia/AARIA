@@ -38,3 +38,4 @@ nltk_data/
 *.pem
 *.crt
 .env
+Backend/llm.env
