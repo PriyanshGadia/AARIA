@@ -443,10 +443,11 @@ class AARIA_Stem:
         
         # 6. Feed back to Evolution Core
         # Evolution learns from the interaction (success/failure)
+        # Format: {"core_name": {"success_rate": 0.0-1.0}}
         await self.evolution.execute_command("trigger_evolution", {
             "performance_data": {
-                "interaction_success": True, 
-                "latency": 0.5 # Mock latency
+                "temporal": {"success_rate": 1.0 if temporal_response.get("success") else 0.0},
+                "frontal": {"success_rate": 0.8}  # Mock frontal performance
             }
         })
 

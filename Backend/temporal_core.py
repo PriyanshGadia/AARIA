@@ -38,10 +38,14 @@ try:
     nltk.data.find('tokenizers/punkt')
     nltk.data.find('tokenizers/punkt_tab')
     nltk.data.find('vader_lexicon')
+    nltk.data.find('taggers/averaged_perceptron_tagger')
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
 except LookupError:
     nltk.download('punkt', quiet=True)
-    nltk.download('punkt_tab', quiet=True)      # <-- added
+    nltk.download('punkt_tab', quiet=True)
     nltk.download('vader_lexicon', quiet=True)
+    nltk.download('averaged_perceptron_tagger', quiet=True)
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)
 
 
 # ==================== CONFIGURATION LOADER ====================
