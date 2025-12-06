@@ -503,6 +503,7 @@ class STEM:
         self.parietal_core = None
         self.occipital_core = None
         self.evolution_core = None
+        self.llm_gateway = None  # LLM Gateway for AI responses
         
         # System state
         self.system_state = "initializing"
@@ -577,6 +578,7 @@ class STEM:
                 from frontal_core import initialize_frontal_core
                 from memory_core import initialize_memory_core, DataClassification
                 from temporal_core import initialize_temporal_core
+                from llm_gateway import initialize_llm_gateway
             except ImportError as e:
                 logging.error(f"Failed to import core modules: {str(e)}")
                 raise RuntimeError(f"Core module import failed: {str(e)}")
@@ -605,6 +607,20 @@ class STEM:
                 self.temporal_core = await initialize_temporal_core(owner_verification)
                 self.cores_initialized["temporal"] = True
                 logging.info("Temporal Core initialized")
+            
+            # Initialize LLM Gateway
+            try:
+                self.llm_gateway = await initialize_llm_gateway()
+                self.cores_initialized["llm"] = True
+                logging.info("LLM Gateway initialized successfully")
+                
+                # Pass LLM Gateway to Temporal Core for response generation
+                if self.temporal_core and hasattr(self.temporal_core, 'set_llm_gateway'):
+                    await self.temporal_core.set_llm_gateway(self.llm_gateway)
+                    logging.info("LLM Gateway connected to Temporal Core")
+            except Exception as llm_error:
+                logging.warning(f"LLM Gateway initialization failed: {str(llm_error)}")
+                logging.warning("System will continue without LLM capabilities")
             
             # Note: Other cores (Parietal, Occipital, Evolution) would be initialized here
             # For now, we have the foundational cores
@@ -705,8 +721,8 @@ class STEM:
             request_type = request.get("type", "unknown")
             
             if request_type == "communication":
-                # Process through Temporal Core
-                result = await self.temporal_core.process_communication(
+                # Process through Temporal Core with LLM response
+                result = await self.temporal_core.process_and_respond(
                     request.get("text", ""),
                     request.get("context")
                 )

@@ -418,6 +418,9 @@ class TemporalCore:
         self.emotional_context = EmotionalContext()
         self.nlp_processor = NaturalLanguageProcessor(self.personality)
         
+        # LLM Gateway for advanced responses
+        self.llm_gateway = None
+        
         # Behavior tracking
         self.behavior_patterns = []
         self.interaction_history = []
@@ -439,6 +442,11 @@ class TemporalCore:
             return await self.owner_verification()
         except:
             return False
+    
+    async def set_llm_gateway(self, llm_gateway):
+        """Set LLM Gateway for advanced response generation"""
+        self.llm_gateway = llm_gateway
+        logger.info("LLM Gateway connected to Temporal Core")
     
     def _initialize_neural_functions(self):
         """Initialize all neural functions for temporal core"""
@@ -612,6 +620,92 @@ class TemporalCore:
         except Exception as e:
             logging.error(f"Response generation error: {str(e)}")
             raise
+    
+    async def process_and_respond(self, input_text: str, 
+                                  context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Process communication and generate AI-powered response"""
+        try:
+            # Process the input first
+            processed = await self.process_communication(input_text, context)
+            processed_input = processed.get("processed_input", {})
+            
+            # Generate AI response if LLM Gateway is available
+            if self.llm_gateway:
+                try:
+                    # Build prompt with personality and emotional context
+                    prompt = self._build_llm_prompt(input_text, processed_input)
+                    
+                    # Get response from LLM
+                    llm_response = await self.llm_gateway.generate(
+                        prompt, 
+                        temperature=0.7 + (self.personality.creativity * 0.3)
+                    )
+                    
+                    if llm_response.success:
+                        response_text = llm_response.content
+                        
+                        return {
+                            "status": "success",
+                            "response": response_text,
+                            "processed_input": processed_input,
+                            "emotional_context": processed.get("emotional_context", {}),
+                            "llm_provider": llm_response.provider,
+                            "llm_model": llm_response.model,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    else:
+                        logger.warning(f"LLM generation failed: {llm_response.error}")
+                        # Fall through to non-LLM response
+                except Exception as llm_error:
+                    logger.error(f"LLM processing error: {str(llm_error)}")
+                    # Fall through to non-LLM response
+            
+            # Fallback: Generate basic response without LLM
+            intent = processed_input.get("intent", {}).get("primary", "unknown")
+            fallback_response = self._generate_fallback_response(intent, processed_input)
+            
+            return {
+                "status": "success_fallback",
+                "response": fallback_response,
+                "processed_input": processed_input,
+                "emotional_context": processed.get("emotional_context", {}),
+                "warning": "LLM not available - using basic response generation",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logging.error(f"Process and respond error: {str(e)}")
+            raise
+    
+    def _build_llm_prompt(self, input_text: str, processed_input: Dict[str, Any]) -> str:
+        """Build prompt for LLM with personality and context"""
+        personality_desc = f"You are AARIA, an advanced AI assistant. Your personality traits: "
+        personality_desc += f"professionalism={self.personality.professionalism:.1f}, "
+        personality_desc += f"warmth={self.personality.warmth:.1f}, "
+        personality_desc += f"assertiveness={self.personality.assertiveness:.1f}, "
+        personality_desc += f"creativity={self.personality.creativity:.1f}. "
+        
+        emotion = self.emotional_context.current_emotion.value
+        mood = self.emotional_context.current_mood.value
+        personality_desc += f"Current emotional state: {emotion}, mood: {mood}. "
+        
+        intent = processed_input.get("intent", {}).get("primary", "unknown")
+        personality_desc += f"User intent: {intent}. "
+        
+        prompt = f"{personality_desc}\n\nUser: {input_text}\n\nAARIA:"
+        return prompt
+    
+    def _generate_fallback_response(self, intent: str, processed_input: Dict[str, Any]) -> str:
+        """Generate basic fallback response when LLM is not available"""
+        intent_responses = {
+            "greeting": "Hello! I'm AARIA. How can I assist you today?",
+            "farewell": "Goodbye! Feel free to reach out anytime.",
+            "question": "I understand you have a question. However, I'm currently operating without my full language model, so I may not provide the best answer.",
+            "command": "I've detected your command. However, without my language model active, I can only perform basic processing.",
+            "unknown": "I detected your message but I'm currently operating without my full language model capabilities."
+        }
+        
+        return intent_responses.get(intent, intent_responses["unknown"])
     
     async def _update_emotional_state(self, processed_input: Dict[str, Any]):
         """Update emotional state based on input"""
