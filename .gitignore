@@ -59,6 +59,9 @@ htmlcov/
 *.crt
 secrets.json
 .env
+llm.env
+*_env.json
+api_keys.txt
 
 # OS Files
 Thumbs.db

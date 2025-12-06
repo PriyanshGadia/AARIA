@@ -2,7 +2,66 @@
 
 ## Overview
 
-The LLM Gateway provides unified access to multiple LLM providers with automatic API key detection from environment variables. It supports automatic fallback and requires zero configuration changes to switch providers.
+The LLM Gateway provides unified access to multiple LLM providers with automatic API key detection from **config/llm.env file** or system environment variables. It supports automatic fallback and requires zero configuration changes to switch providers.
+
+## Quick Setup
+
+### Method 1: Using config/llm.env File (Recommended)
+
+This is the easiest and most secure way to manage your API keys.
+
+**Step 1:** Create the environment file
+```bash
+# Copy the example file
+cp config/.env.example config/llm.env
+
+# Or let AARIA create it for you
+cd Backend
+python env_loader.py
+```
+
+**Step 2:** Edit config/llm.env and add your API keys
+```bash
+# Example config/llm.env
+GROQ_API_KEY=your-actual-groq-key-here
+OPENAI_API_KEY=sk-your-actual-openai-key
+```
+
+**Step 3:** Run AARIA
+```bash
+python Backend/stem.py
+```
+
+That's it! AARIA will automatically detect and use your API keys.
+
+### Method 2: Using System Environment Variables
+
+If you prefer using system environment variables instead of a file:
+
+**Linux/Mac:**
+```bash
+export GROQ_API_KEY='your-key'
+python Backend/stem.py
+```
+
+**Windows PowerShell:**
+```powershell
+$env:GROQ_API_KEY='your-key'
+python Backend/stem.py
+```
+
+**Windows Command Prompt:**
+```cmd
+set GROQ_API_KEY=your-key
+python Backend\stem.py
+```
+
+## Priority Order
+
+AARIA loads API keys in this order (first found wins):
+1. **config/llm.env file** (most secure, recommended)
+2. **System environment variables** (set via export/set commands)
+3. **Default/None** (falls back to Ollama local mode)
 
 ## Supported Providers
 
@@ -16,7 +75,22 @@ The LLM Gateway provides unified access to multiple LLM providers with automatic
 
 ## Quick Start
 
-### Option 1: Local Ollama (FREE, No API Key)
+### Option 1: Using config/llm.env File (Easiest & Most Secure)
+
+```bash
+# Step 1: Create your API key file
+cp config/.env.example config/llm.env
+
+# Step 2: Edit the file and add your actual API keys
+# (Use any text editor: notepad, vim, nano, VS Code, etc.)
+
+# Step 3: Run AARIA - it automatically detects the keys
+python Backend/stem.py
+```
+
+The `config/llm.env` file is **never committed to git** (it's in .gitignore), keeping your keys secure.
+
+### Option 2: Local Ollama (FREE, No API Key)
 
 ```bash
 # Install Ollama
@@ -29,7 +103,7 @@ ollama pull llama3:latest
 python Backend/stem.py
 ```
 
-### Option 2: Groq (FREE API Key, Ultra-Fast)
+### Option 3: System Environment Variables
 
 ```bash
 # Get free API key from https://console.groq.com/

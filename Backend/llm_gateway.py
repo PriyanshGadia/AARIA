@@ -1,8 +1,8 @@
 """
-AARIA - LLM Gateway v1.0
+AARIA - LLM Gateway v1.1
 Primary Module: Unified interface for multiple LLM providers with environment-based API key detection
-Update Notes: Initial deployment - Supports OpenAI, Groq, Gemini, Anthropic, and local Ollama
-Security Level: API keys loaded from environment variables only - never hardcoded
+Update Notes: v1.1 - Added support for loading API keys from config/llm.env file
+Security Level: API keys loaded from .env file or environment variables - never hardcoded
 Architecture: Provider abstraction with automatic fallback and health checking
 """
 
@@ -14,6 +14,14 @@ from typing import Dict, List, Any, Optional
 from enum import Enum
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
+
+# Import environment loader
+try:
+    from env_loader import load_llm_environment
+except ImportError:
+    # Fallback if env_loader not available
+    def load_llm_environment():
+        return {}
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +425,14 @@ class LLMGateway:
         self.providers: Dict[str, LLMProviderInterface] = {}
         self.default_provider: Optional[str] = None
         self.fallback_order: List[str] = []
+        
+        # Load API keys from config/llm.env file first (if exists)
+        logger.info("Loading LLM configuration...")
+        env_vars = load_llm_environment()
+        if env_vars:
+            logger.info(f"✓ Loaded {len(env_vars)} API key(s) from config/llm.env")
+        else:
+            logger.debug("No config/llm.env file found, using system environment variables only")
         
         # Initialize providers by reading from environment variables
         self._initialize_providers()
