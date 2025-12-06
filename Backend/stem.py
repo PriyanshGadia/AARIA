@@ -311,6 +311,30 @@ class AARIA_Stem:
             logger.warning("Evolution Core failed. Self-growth disabled.")
         self.event_bus.subscribe("evolution", self._handle_evolution_event)
         
+        # G. Initialize LLM Gateway (Optional Enhancement)
+        try:
+            from llm_gateway import get_llm_gateway
+            llm_gateway = await get_llm_gateway()
+            
+            # Initialize with default config (disabled by default)
+            llm_config = {
+                "enabled": False,  # Set to True to enable LLM
+                "default_provider": "fallback",
+                "providers": {
+                    "local": {
+                        "endpoint": "http://localhost:11434",
+                        "model": "llama2"
+                    },
+                    "openai": {
+                        "model": "gpt-3.5-turbo"
+                    }
+                }
+            }
+            await llm_gateway.initialize(llm_config)
+            logger.info("LLM Gateway initialized (disabled by default)")
+        except Exception as e:
+            logger.warning(f"LLM Gateway initialization failed: {e}")
+        
         self.is_running = True
         logger.info(f"A.A.R.I.A. v{self.config['version']} is ONLINE.")
         

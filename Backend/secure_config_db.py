@@ -162,6 +162,22 @@ class SecureConfigDatabase:
         self.connection.commit()
         logger.debug("Database schema created/verified")
     
+    async def _reinitialize_database(self):
+        """Reinitialize database when encryption key changes"""
+        try:
+            logger.info("Clearing old encrypted data and reinitializing with new key...")
+            cursor = self.connection.cursor()
+            cursor.execute("DELETE FROM system_config")
+            cursor.execute("DELETE FROM core_config")
+            cursor.execute("DELETE FROM security_policies")
+            self.connection.commit()
+            
+            # Reinitialize with defaults
+            await self._initialize_defaults()
+            logger.info("Database reinitialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to reinitialize database: {e}")
+    
     async def _initialize_defaults(self):
         """Initialize database with default configuration values"""
         cursor = self.connection.cursor()
@@ -323,6 +339,13 @@ class SecureConfigDatabase:
             return decrypted_value
             
         except Exception as e:
+            from cryptography.exceptions import InvalidTag
+            if isinstance(e, InvalidTag):
+                logger.warning(f"Decryption failed for {category}.{key} - encryption key changed. Reinitializing database...")
+                # Encryption key has changed (different biometric/salt)
+                # Reinitialize database with new defaults
+                await self._reinitialize_database()
+                return default
             logger.error(f"Failed to get config {category}.{key}: {e}", exc_info=True)
             return default
     
