@@ -3198,17 +3198,17 @@ class TemporalNeuralNetwork:
                         try:
                             # Retrieve recent conversation memories
                             history_result = await self.memory_core.execute_command(
-                                "retrieve_memories",
+                                "search_memories",
                                 {
                                     "query": {"tags": ["conversation", "recent"]},
-                                    "limit": 5,
-                                    "tier": "owner_confidential"
+                                    "max_results": 5,
+                                    "access_level": "owner_root"
                                 }
                             )
                             
-                            if history_result.get("success") and history_result.get("memories"):
+                            if history_result.get("success") and history_result.get("results"):
                                 history_items = []
-                                for memory in history_result["memories"]:
+                                for memory in history_result["results"]:
                                     # Extract conversation turns from memory
                                     data = memory.get("data", {})
                                     if isinstance(data, dict):
@@ -3259,7 +3259,6 @@ class TemporalNeuralNetwork:
                                         "intent": intent
                                     },
                                     "tags": ["conversation", "recent", f"intent_{intent}"],
-                                    "tier": "owner_confidential",
                                     "metadata": {
                                         "type": "conversation_turn",
                                         "llm_provider": llm_response.provider

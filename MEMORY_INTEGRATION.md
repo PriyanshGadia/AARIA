@@ -87,11 +87,11 @@ AARIA now features a **centralized encrypted memory storage system** that mainta
    ```python
    # Retrieve recent conversation memories
    history_result = await self.memory_core.execute_command(
-       "retrieve_memories",
+       "search_memories",
        {
            "query": {"tags": ["conversation", "recent"]},
-           "limit": 5,
-           "tier": "owner_confidential"
+           "max_results": 5,
+           "access_level": "owner_root"
        }
    )
    ```
