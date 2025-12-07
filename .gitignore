@@ -39,3 +39,4 @@ nltk_data/
 *.crt
 .env
 Backend/llm.env
+Backend/.aaria_config.db
