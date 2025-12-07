@@ -294,6 +294,10 @@ class AARIA_Stem:
             logger.error("Temporal Core failed. Voice/Text interface will be disabled.")
         self.event_bus.subscribe("temporal", self._handle_temporal_event)
         
+        # Connect Temporal Core to Memory Core for conversation persistence
+        self.temporal.neural_network.set_memory_core(self.memory)
+        logger.info("Temporal Core connected to Memory Core for conversation persistence")
+        
         # D. Occipital (Vision/Security)
         logger.info("Booting Occipital Core...")
         if not await self.occipital.start():
