@@ -515,10 +515,10 @@ class LLMGateway:
                     "parts": [{"text": request.system_prompt}]
                 }
             
-            # Make request to Gemini (using v1 API, not v1beta)
+            # Make request to Gemini (using v1beta API for systemInstruction support)
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
                     json=payload,
                     timeout=30
                 ) as response:
