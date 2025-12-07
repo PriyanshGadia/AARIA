@@ -13,7 +13,23 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 from enum import Enum
 from dataclasses import dataclass, field
+from pathlib import Path
 import logging
+
+# Configuration constants
+LLM_ENV_FILE = 'llm.env'
+
+# Load environment variables from llm.env if it exists
+try:
+    from dotenv import load_dotenv
+    # Try to load from Backend/llm.env first, then from current directory
+    env_path = Path(__file__).parent / LLM_ENV_FILE
+    if env_path.exists():
+        load_dotenv(env_path)
+    else:
+        load_dotenv()  # Load from default .env location
+except ImportError:
+    pass  # python-dotenv not installed, will use system environment variables
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +180,7 @@ class LLMGateway:
             
             # Check for cloud API keys
             if os.getenv("GEMINI_API_KEY"):
-                available_providers["gemini"] = "Google Gemini (gemini-pro)"
+                available_providers["gemini"] = "Google Gemini (gemini-1.5-flash)"
             
             if os.getenv("GROQ_API_KEY"):
                 available_providers["groq"] = "Groq (llama3-70b-8192, ultra-fast)"
@@ -390,13 +406,13 @@ class LLMGateway:
             return await self._fallback_llm(request)
     
     async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Groq API"""
+        """Generate response using Groq API (ultra-fast inference)"""
         try:
             import aiohttp
             
             groq_config = self.providers_config.get("groq", {})
             api_key = os.getenv("GROQ_API_KEY") or groq_config.get("api_key")
-            model = groq_config.get("model", "mixtral-8x7b-32768")  # Common Groq models: llama3-70b-8192, mixtral-8x7b-32768
+            model = groq_config.get("model", "llama3-70b-8192")  # Default to llama3-70b-8192
             
             if not api_key:
                 logger.warning("Groq API key not found, using fallback")
@@ -471,7 +487,8 @@ class LLMGateway:
             
             gemini_config = self.providers_config.get("gemini", {})
             api_key = os.getenv("GEMINI_API_KEY") or gemini_config.get("api_key")
-            model = gemini_config.get("model", "gemini-pro")
+            # Use gemini-1.5-flash as default (gemini-pro is deprecated for v1beta)
+            model = gemini_config.get("model", "gemini-1.5-flash")
             
             if not api_key:
                 logger.warning("Gemini API key not found, using fallback")
@@ -540,75 +557,6 @@ class LLMGateway:
                         
         except Exception as e:
             logger.warning(f"Gemini LLM failed: {e}. Using fallback.")
-            return await self._fallback_llm(request)
-    
-    async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Groq API (ultra-fast inference)"""
-        try:
-            import aiohttp
-            
-            groq_config = self.providers_config.get("groq", {})
-            api_key = os.getenv("GROQ_API_KEY") or groq_config.get("api_key")
-            model = groq_config.get("model", "llama3-70b-8192")
-            
-            if not api_key:
-                logger.warning("Groq API key not found, using fallback")
-                return await self._fallback_llm(request)
-            
-            # Prepare messages (Groq uses OpenAI-compatible API)
-            messages = []
-            if request.system_prompt:
-                messages.append({"role": "system", "content": request.system_prompt})
-            messages.append({"role": "user", "content": request.prompt})
-            
-            # Prepare request
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": request.max_tokens,
-                "temperature": request.temperature
-            }
-            
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Make request to Groq
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        choice = data["choices"][0]
-                        tokens = data.get("usage", {}).get("total_tokens", 0)
-                        
-                        # Update token usage
-                        self.token_usage["total"] += tokens
-                        self.token_usage["today"] += tokens
-                        
-                        return LLMResponse(
-                            text=choice["message"]["content"],
-                            provider="groq",
-                            tokens_used=tokens,
-                            confidence=0.9,
-                            metadata={
-                                "model": model, 
-                                "finish_reason": choice.get("finish_reason"),
-                                "performance": "ultra_fast"
-                            }
-                        )
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Groq request failed: {response.status} - {error_text}")
-                        return await self._fallback_llm(request)
-                        
-        except Exception as e:
-            logger.warning(f"Groq LLM failed: {e}. Using fallback.")
             return await self._fallback_llm(request)
     
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:

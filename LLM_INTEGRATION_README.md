@@ -90,7 +90,7 @@ llm_config = {
             "model": "claude-3-sonnet-20240229"
         },
         "gemini": {
-            "model": "gemini-pro"
+            "model": "gemini-1.5-flash"  # or "gemini-1.5-pro"
         },
         "groq": {
             "model": "llama3-70b-8192"  # ultra-fast LLaMA 3

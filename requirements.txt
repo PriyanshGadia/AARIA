@@ -26,6 +26,9 @@ dataclasses-json>=0.6.0
 # HTTP Client for LLM Integration
 aiohttp>=3.9.0
 
+# Environment Variable Management
+python-dotenv>=1.0.0
+
 # Note: The following are optional and require separate installation:
 # - OpenCV (cv2) for vision processing: pip install opencv-python
 # - face_recognition for biometric auth: pip install face-recognition
