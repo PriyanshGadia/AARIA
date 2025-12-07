@@ -495,10 +495,15 @@ class LLMGateway:
                 return await self._fallback_llm(request)
             
             # Prepare request for Gemini
-            # Note: v1 API doesn't support systemInstruction field, so we prepend it to the prompt
+            # Note: v1 API doesn't support systemInstruction field, so we prepend it to the prompt.
+            # This workaround may slightly affect token counting but preserves system prompt functionality.
+            # The v1 API is used because v1beta doesn't support the gemini-1.5-flash model.
             combined_prompt = request.prompt
             if request.system_prompt:
-                combined_prompt = f"{request.system_prompt}\n\n{request.prompt}"
+                # Strip whitespace to avoid double newlines if prompts already have them
+                system_part = request.system_prompt.strip()
+                user_part = request.prompt.strip()
+                combined_prompt = f"{system_part}\n\n{user_part}"
             
             payload = {
                 "contents": [
