@@ -16,11 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import logging
 
+# Configuration constants
+LLM_ENV_FILE = 'llm.env'
+
 # Load environment variables from llm.env if it exists
 try:
     from dotenv import load_dotenv
     # Try to load from Backend/llm.env first, then from current directory
-    env_path = Path(__file__).parent / 'llm.env'
+    env_path = Path(__file__).parent / LLM_ENV_FILE
     if env_path.exists():
         load_dotenv(env_path)
     else:
