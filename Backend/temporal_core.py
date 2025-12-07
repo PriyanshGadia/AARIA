@@ -3246,6 +3246,12 @@ class TemporalNeuralNetwork:
                     # Generate response
                     llm_response = await llm_gateway.generate_response(llm_request)
                     
+                    # Check if response is from fallback (indicates LLM failure)
+                    if llm_response.provider == "no_llm_fallback" or llm_response.confidence < 0.2:
+                        logger.warning(f"LLM returned fallback response. Provider: {llm_gateway.default_provider}")
+                        # Don't use fallback response, use neuron-based generation instead
+                        raise Exception("LLM unavailable, falling back to neuron generation")
+                    
                     # Store conversation in Memory Core
                     if self.memory_core:
                         try:

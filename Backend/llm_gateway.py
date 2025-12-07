@@ -236,6 +236,14 @@ class LLMGateway:
             if available_providers:
                 logger.info(f"LLM Gateway initialized: enabled={self.enabled}, default={self.default_provider.value}")
                 logger.info(f"Available providers: {', '.join([f'{k}: {v}' for k, v in available_providers.items()])}")
+                
+                # Set enabled to True if we have providers
+                if self.default_provider != LLMProvider.FALLBACK:
+                    self.enabled = True
+                    logger.info(f"✅ LLM Gateway ENABLED with provider: {self.default_provider.value}")
+                else:
+                    self.enabled = False
+                    logger.warning("⚠️ No LLM provider active, using FALLBACK mode")
             else:
                 logger.warning("⚠️  NO AI PROVIDERS AVAILABLE - FALLBACK MODE ONLY")
                 logger.warning("Install Ollama OR set an API key:")
@@ -491,7 +499,7 @@ class LLMGateway:
             model = gemini_config.get("model", "gemini-1.5-flash")
             
             if not api_key:
-                logger.warning("Gemini API key not found, using fallback")
+                logger.error("❌ Gemini API key not found! Set GEMINI_API_KEY environment variable.")
                 return await self._fallback_llm(request)
             
             # Prepare request for Gemini
@@ -552,11 +560,15 @@ class LLMGateway:
                             return await self._fallback_llm(request)
                     else:
                         error_text = await response.text()
-                        logger.error(f"Gemini request failed: {response.status} - {error_text}")
+                        logger.error(f"❌ Gemini API request failed: {response.status}")
+                        logger.error(f"Error details: {error_text}")
+                        logger.error(f"Using model: {model}")
+                        logger.error("Possible issues: Invalid API key, API quota exceeded, or model not accessible")
                         return await self._fallback_llm(request)
                         
         except Exception as e:
-            logger.warning(f"Gemini LLM failed: {e}. Using fallback.")
+            logger.error(f"❌ Gemini LLM failed with exception: {e}")
+            logger.error(f"Exception type: {type(e).__name__}")
             return await self._fallback_llm(request)
     
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
