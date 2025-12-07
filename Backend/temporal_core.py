@@ -3259,6 +3259,7 @@ class TemporalNeuralNetwork:
                                         "intent": intent
                                     },
                                     "tags": ["conversation", "recent", f"intent_{intent}"],
+                                    "tier": "owner_confidential",
                                     "metadata": {
                                         "type": "conversation_turn",
                                         "llm_provider": llm_response.provider
