@@ -13,7 +13,22 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 from enum import Enum
 from dataclasses import dataclass, field
+from pathlib import Path
 import logging
+
+# Load environment variables from llm.env if it exists
+try:
+    from dotenv import load_dotenv
+    # Try to load from Backend/llm.env first, then from current directory
+    env_path = Path(__file__).parent / 'llm.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+        logger = logging.getLogger(__name__)
+        logger.info(f"Loaded environment variables from {env_path}")
+    else:
+        load_dotenv()  # Load from default .env location
+except ImportError:
+    pass  # python-dotenv not installed, will use system environment variables
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +179,7 @@ class LLMGateway:
             
             # Check for cloud API keys
             if os.getenv("GEMINI_API_KEY"):
-                available_providers["gemini"] = "Google Gemini (gemini-pro)"
+                available_providers["gemini"] = "Google Gemini (gemini-1.5-flash)"
             
             if os.getenv("GROQ_API_KEY"):
                 available_providers["groq"] = "Groq (llama3-70b-8192, ultra-fast)"
@@ -471,7 +486,8 @@ class LLMGateway:
             
             gemini_config = self.providers_config.get("gemini", {})
             api_key = os.getenv("GEMINI_API_KEY") or gemini_config.get("api_key")
-            model = gemini_config.get("model", "gemini-pro")
+            # Use gemini-1.5-flash as default (gemini-pro is deprecated for v1beta)
+            model = gemini_config.get("model", "gemini-1.5-flash")
             
             if not api_key:
                 logger.warning("Gemini API key not found, using fallback")

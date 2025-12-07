@@ -333,7 +333,7 @@ class AARIA_Stem:
                         "model": "claude-3-sonnet-20240229"
                     },
                     "gemini": {
-                        "model": "gemini-pro"
+                        "model": "gemini-1.5-flash"  # Updated to use new Gemini model
                     },
                     "groq": {
                         "model": "llama3-70b-8192"
