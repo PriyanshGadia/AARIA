@@ -17,7 +17,6 @@ from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from collections import defaultdict
 import inspect
-import re
 
 # Import Cores
 # Note: Ensure all core files are in the python path or Backend package
@@ -29,7 +28,7 @@ try:
     from occipital_core import OccipitalCore
     from evolution_core import EvolutionCore
     from secure_config_db import SecureConfigDatabase, get_config_database
-    from llm_gateway import LLMRequest, LLMProvider, PrivacyLevel, get_llm_gateway
+    from llm_gateway import LLMRequest, LLMProvider, PrivacyLevel
 except ImportError as e:
     # Critical failure if cores are missing
     print(f"CRITICAL: Failed to import core modules: {e}")
@@ -143,53 +142,6 @@ class StemConfigLoader:
             logger.warning(f"Set AARIA_BIOMETRIC_HASH environment variable with actual biometric data.")
         
         return biometric_hash
-    
-    @staticmethod
-    def load_environment_variables(env_file_path: str = "llm.env"):
-        """
-        Manually parse .env file to load API keys into os.environ for ALL cores.
-        This ensures Frontal, Temporal, and Gateway cores can access keys immediately.
-        """
-        try:
-            # Search order: Absolute -> Current Dir -> Backend Dir
-            search_paths = [
-                env_file_path,
-                os.path.join(os.getcwd(), env_file_path),
-                os.path.join(os.getcwd(), "AARIA", "Backend", env_file_path),
-                os.path.join(os.path.dirname(__file__), env_file_path)
-            ]
-            
-            target_path = None
-            for p in search_paths:
-                if os.path.exists(p):
-                    target_path = p
-                    break
-            
-            if not target_path:
-                logger.warning(f"Environment file '{env_file_path}' not found. Cloud cores may fail.")
-                return
-
-            logger.info(f"Loading environment from: {target_path}")
-            with open(target_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    # Secure parsing: skip comments, empty lines
-                    if not line or line.startswith('#') or line.startswith('['):
-                        continue
-                    
-                    # Regex to capture KEY="VALUE" or KEY=VALUE
-                    match = re.match(r'^([A-Za-z0-9_]+)=(.*)$', line)
-                    if match:
-                        key, value = match.groups()
-                        # Sanitize quotes
-                        value = value.strip('"').strip("'")
-                        if key not in os.environ:
-                            os.environ[key] = value
-            
-            logger.info("Environment variables injected into system scope.")
-                
-        except Exception as e:
-            logger.error(f"Failed to load environment file: {e}")
 
 # ==================== CENTRAL EVENT BUS ====================
 @dataclass
@@ -303,81 +255,109 @@ class AARIA_Stem:
     async def boot(self):
         """System Boot Sequence"""
         logger.info("Initializing A.A.R.I.A. Stem...")
-        
-        # 1. GLOBAL ENV LOAD - MUST BE FIRST
-        # This fixes the integration issue where cores didn't see the keys
-        StemConfigLoader.load_environment_variables("llm.env")
         self.start_time = datetime.now()
         
-        # 2. Get Biometric Credentials
+        # 1. Get Biometric Credentials
         self.biometric_hash = StemConfigLoader.get_secure_boot_credentials()
         logger.info("Biometric authentication completed")
         
-        # 3. Initialize Configuration Loader with Encrypted Database
+        # 2. Initialize Configuration Loader with Encrypted Database
         self.config_loader = StemConfigLoader()
         if not await self.config_loader.initialize(self.biometric_hash):
             raise RuntimeError("Failed to initialize secure configuration database")
         
-        # 4. Load System Configuration from Database
+        # 3. Load System Configuration from Database
         self.config = await self.config_loader.load_system_config()
-        logger.info(f"Configuration loaded: {self.config.get('system_name', 'AARIA')} v{self.config.get('version', '1.0.0')}")
+        logger.info(f"Configuration loaded from encrypted database: {self.config['system_name']} v{self.config['version']}")
         
-        # 5. Start Event Bus
+        # 4. Start Event Bus
         await self.event_bus.start()
         
-        # 6. Initialize Cores (Sequential Dependency)
+        # 5. Initialize Cores (Sequential Dependency)
+        
+        # A. Parietal (Self-Awareness/Hardware) - First to monitor boot health
         logger.info("Booting Parietal Core...")
-        if not await self.parietal.start(): raise RuntimeError("Parietal Core failed")
+        if not await self.parietal.start():
+            raise RuntimeError("Parietal Core failed to start. Aborting.")
         self.event_bus.subscribe("parietal", self._handle_parietal_event)
         
+        # B. Memory (Storage/Identity) - Required for others to load profiles
         logger.info("Booting Memory Core...")
-        if not await self.memory.start(self.biometric_hash): raise RuntimeError("Memory Core failed")
+        # Note: Memory core needs biometric hash to unlock encrypted vaults
+        if not await self.memory.start(self.biometric_hash):
+            raise RuntimeError("Memory Core failed to unlock. Biometric auth failed.")
         self.event_bus.subscribe("memory", self._handle_memory_event)
         
+        # C. Temporal (Communication/Personality)
         logger.info("Booting Temporal Core...")
-        if not await self.temporal.start(): logger.error("Temporal Core failed")
+        if not await self.temporal.start():
+            logger.error("Temporal Core failed. Voice/Text interface will be disabled.")
         self.event_bus.subscribe("temporal", self._handle_temporal_event)
         
+        # Connect Temporal Core to Memory Core for conversation persistence
+        self.temporal.neural_network.set_memory_core(self.memory)
+        logger.info("Temporal Core connected to Memory Core for conversation persistence")
+        
+        # D. Occipital (Vision/Security)
         logger.info("Booting Occipital Core...")
-        if not await self.occipital.start(): logger.warning("Occipital Core failed")
+        if not await self.occipital.start():
+            logger.warning("Occipital Core failed. Vision systems offline.")
         self.event_bus.subscribe("occipital", self._handle_occipital_event)
         
+        # E. Frontal (Decision/Planning) - Depends on Memory & Temporal
         logger.info("Booting Frontal Core...")
-        if not await self.frontal.start(): raise RuntimeError("Frontal Core failed")
+        if not await self.frontal.start():
+            raise RuntimeError("Frontal Core failed. Reasoning engine unavailable.")
         self.event_bus.subscribe("frontal", self._handle_frontal_event)
         
+        # F. Evolution (Self-Improvement) - Last to load
         logger.info("Booting Evolution Core...")
-        if not await self.evolution.start(): logger.warning("Evolution Core failed")
+        if not await self.evolution.start():
+            logger.warning("Evolution Core failed. Self-growth disabled.")
         self.event_bus.subscribe("evolution", self._handle_evolution_event)
         
-        # G. Initialize LLM Gateway
+        # G. Initialize LLM Gateway (REQUIRES ACTUAL LLM FOR INTELLIGENCE)
         try:
+            from llm_gateway import get_llm_gateway
             llm_gateway = await get_llm_gateway()
             
-            # Auto-detect best provider from ENV
-            default_prov = "local"
-            if os.getenv("DEFAULT_LLM_PROVIDER"):
-                default_prov = os.getenv("DEFAULT_LLM_PROVIDER").lower()
-            elif os.getenv("GEMINI_API_KEY"): default_prov = "gemini"
-            elif os.getenv("OPENAI_API_KEY"): default_prov = "openai"
-            
+            # Check for Ollama or Cloud LLM availability
             llm_config = {
                 "enabled": True,
-                "default_provider": default_prov,
+                "default_provider": "local",  # Try local Ollama first
                 "providers": {
-                    "local": {"endpoint": os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434"), "model": os.getenv("OLLAMA_MODEL", "llama3:latest")},
-                    "openai": {"api_key": os.getenv("OPENAI_API_KEY")},
-                    "anthropic": {"api_key": os.getenv("ANTHROPIC_API_KEY")},
-                    "gemini": {"api_key": os.getenv("GEMINI_API_KEY"), "model": "gemini-1.5-flash"},
-                    "groq": {"api_key": os.getenv("GROQ_API_KEY")}
+                    "local": {
+                        "endpoint": "http://localhost:11434",
+                        "model": "llama3:latest"  # Default to llama3:latest
+                    },
+                    "openai": {
+                        "model": "gpt-3.5-turbo"
+                    },
+                    "anthropic": {
+                        "model": "claude-3-sonnet-20240229"
+                    },
+                    "gemini": {
+                        "model": "gemini-1.5-flash"  # Updated to use new Gemini model
+                    },
+                    "groq": {
+                        "model": "llama3-70b-8192"
+                    }
                 }
             }
+            # Initialize will auto-detect available providers (Ollama, API keys)
             await llm_gateway.initialize(llm_config)
             
+            # Show setup instructions if no providers available
             if llm_gateway.default_provider == LLMProvider.FALLBACK:
-                logger.warning("⚠️  NO AI PROVIDERS AVAILABLE - CHECK llm.env")
-            else:
-                logger.info(f"✅ AI Provider Active: {llm_gateway.default_provider.value}")
+                logger.warning("⚠️  NO AI PROVIDERS FOUND - FALLBACK MODE ONLY")
+                logger.warning("⚠️  FOR INTELLIGENT AI RESPONSES:")
+                logger.warning("⚠️  Option 1: Install Ollama (FREE, LOCAL, PRIVATE)")
+                logger.warning("⚠️    curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest")
+                logger.warning("⚠️  Option 2: Use Cloud LLM")
+                logger.warning("⚠️    - Gemini (FREE): export GEMINI_API_KEY='your-key'")
+                logger.warning("⚠️    - Groq (fast, cheap): export GROQ_API_KEY='your-key'")
+                logger.warning("⚠️    - OpenAI: export OPENAI_API_KEY='your-key'")
+                logger.warning("⚠️    - Anthropic: export ANTHROPIC_API_KEY='your-key'")
                 
         except Exception as e:
             logger.error(f"LLM Gateway initialization failed: {e}")
@@ -385,11 +365,11 @@ class AARIA_Stem:
         self.is_running = True
         logger.info(f"A.A.R.I.A. v{self.config['version']} is ONLINE.")
         
-        # Start Orchestration Loops
+        # 6. Start Orchestration Loops
         asyncio.create_task(self._main_control_loop())
         asyncio.create_task(self._watchdog_loop())
         
-        # Initial Greeting
+        # 7. Initial Greeting
         await self._system_ready_announcement()
 
     async def shutdown(self):

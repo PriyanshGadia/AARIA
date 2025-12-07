@@ -30,6 +30,10 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 import threading
 import queue
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 # Import LLM Gateway
 try:
     from llm_gateway import get_llm_gateway, LLMRequest, LLMProvider, PrivacyLevel
@@ -37,9 +41,6 @@ except ImportError:
     logger.warning("LLM Gateway not available")
     get_llm_gateway = None
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 try:
     nltk.data.find('tokenizers/punkt')
@@ -2832,6 +2833,7 @@ class TemporalNeuralNetwork:
         self.conversation_manager = ConversationManager()
         self.emotional_update_task = None
         self.initialized = False
+        self.memory_core = None  # Reference to Memory Core for conversation persistence
         self.performance_metrics = {
             "emotions_processed": 0,
             "conversations_managed": 0,
@@ -2868,6 +2870,11 @@ class TemporalNeuralNetwork:
         
         self.initialized = True
         logger.info(f"Temporal Core initialized with {len(self.neurons)} neurons")
+    
+    def set_memory_core(self, memory_core):
+        """Set reference to Memory Core for conversation persistence"""
+        self.memory_core = memory_core
+        logger.info("Memory Core reference set for conversation persistence")
     
     async def _establish_initial_connections(self):
         """Establish initial neural connections"""
@@ -3186,7 +3193,37 @@ class TemporalNeuralNetwork:
                     intent = context.get("intent", "unknown")
                     entities = context.get("entities", [])
                     
-                    # Create system prompt with personality
+                    # Load conversation history from Memory Core
+                    conversation_history = ""
+                    if self.memory_core:
+                        try:
+                            # Retrieve recent conversation memories
+                            history_result = await self.memory_core.execute_command(
+                                "search_memories",
+                                {
+                                    "query": {"tags": ["conversation", "recent"]},
+                                    "max_results": 5,
+                                    "access_level": "owner_root"
+                                }
+                            )
+                            
+                            if history_result.get("success") and history_result.get("results"):
+                                history_items = []
+                                for memory in history_result["results"]:
+                                    # Extract conversation turns from memory
+                                    data = memory.get("data", {})
+                                    if isinstance(data, dict):
+                                        user_msg = data.get("user_message", "")
+                                        ai_msg = data.get("ai_response", "")
+                                        if user_msg and ai_msg:
+                                            history_items.append(f"User: {user_msg}\nAARIA: {ai_msg}")
+                                
+                                if history_items:
+                                    conversation_history = "\n\nRecent conversation history:\n" + "\n".join(history_items[-3:])
+                        except Exception as e:
+                            logger.debug(f"Could not load conversation history: {e}")
+                    
+                    # Create system prompt with personality and memory
                     system_prompt = f"You are AARIA, a personal AI assistant. "
                     if self.personality_profile:
                         traits = self.personality_profile
@@ -3194,6 +3231,7 @@ class TemporalNeuralNetwork:
                         system_prompt += f"Conscientiousness={traits.get('conscientiousness', 0.5):.1f}, "
                         system_prompt += f"Extraversion={traits.get('extraversion', 0.5):.1f}. "
                     system_prompt += "Be helpful, natural, and concise in your responses."
+                    system_prompt += conversation_history
                     
                     # Create LLM request
                     llm_request = LLMRequest(
@@ -3209,6 +3247,29 @@ class TemporalNeuralNetwork:
                     # Generate response
                     llm_response = await llm_gateway.generate_response(llm_request)
                     
+                    # Store conversation in Memory Core
+                    if self.memory_core:
+                        try:
+                            await self.memory_core.execute_command(
+                                "store_memory",
+                                {
+                                    "data": {
+                                        "user_message": user_input,
+                                        "ai_response": llm_response.text,
+                                        "timestamp": datetime.now().isoformat(),
+                                        "intent": intent
+                                    },
+                                    "tags": ["conversation", "recent", f"intent_{intent}"],
+                                    "tier": "owner_confidential",
+                                    "metadata": {
+                                        "type": "conversation_turn",
+                                        "llm_provider": llm_response.provider
+                                    }
+                                }
+                            )
+                        except Exception as e:
+                            logger.debug(f"Could not store conversation: {e}")
+                    
                     return {
                         "generated_response": llm_response.text,
                         "method": f"llm_{llm_response.provider}",
@@ -3216,7 +3277,8 @@ class TemporalNeuralNetwork:
                         "tokens_used": llm_response.tokens_used,
                         "response_characteristics": {
                             "provider": llm_response.provider,
-                            "personality_applied": bool(self.personality_profile)
+                            "personality_applied": bool(self.personality_profile),
+                            "memory_included": bool(conversation_history)
                         }
                     }
             except Exception as e:
