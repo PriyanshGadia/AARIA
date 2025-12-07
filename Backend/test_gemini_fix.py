@@ -82,9 +82,9 @@ async def test_gemini_endpoint():
                 
                 print(f"   - API URL called: {url}")
                 
-                # Verify it uses v1beta API for systemInstruction support
-                if '/v1beta/models/' in url:
-                    print("   ✓ Correct API version (v1beta) is used")
+                # Verify it uses v1 API (v1beta had model compatibility issues)
+                if '/v1/models/' in url and '/v1beta/' not in url:
+                    print("   ✓ Correct API version (v1) is used")
                 else:
                     print(f"   ✗ WRONG API version! URL: {url}")
                     return False

@@ -495,11 +495,16 @@ class LLMGateway:
                 return await self._fallback_llm(request)
             
             # Prepare request for Gemini
+            # Note: v1 API doesn't support systemInstruction field, so we prepend it to the prompt
+            combined_prompt = request.prompt
+            if request.system_prompt:
+                combined_prompt = f"{request.system_prompt}\n\n{request.prompt}"
+            
             payload = {
                 "contents": [
                     {
                         "parts": [
-                            {"text": request.prompt}
+                            {"text": combined_prompt}
                         ]
                     }
                 ],
@@ -509,16 +514,10 @@ class LLMGateway:
                 }
             }
             
-            # Add system instruction if provided
-            if request.system_prompt:
-                payload["systemInstruction"] = {
-                    "parts": [{"text": request.system_prompt}]
-                }
-            
-            # Make request to Gemini (using v1beta API for systemInstruction support)
+            # Make request to Gemini (using v1 API - stable and supports gemini-1.5-flash)
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+                    f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}",
                     json=payload,
                     timeout=30
                 ) as response:
