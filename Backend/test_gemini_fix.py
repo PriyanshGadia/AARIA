@@ -74,7 +74,11 @@ async def test_gemini_endpoint():
                 mock_session.post.assert_called_once()
                 call_args = mock_session.post.call_args
                 
-                url = call_args[0][0] if call_args[0] else call_args.kwargs.get('url', '')
+                # Extract URL more explicitly with proper error handling
+                try:
+                    url = call_args.args[0] if call_args.args else call_args.kwargs.get('url', '')
+                except (AttributeError, IndexError):
+                    url = str(call_args)
                 
                 print(f"   - API URL called: {url}")
                 

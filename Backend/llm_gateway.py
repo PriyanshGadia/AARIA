@@ -572,10 +572,14 @@ class LLMGateway:
         try:
             logger.info("Attempting to fallback to local Ollama...")
             
+            # Get Ollama endpoint from config or use default
+            ollama_config = self.providers_config.get("local", {})
+            ollama_endpoint = ollama_config.get("endpoint", os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434"))
+            
             # Check if Ollama is available
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                async with session.get("http://localhost:11434/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
+                async with session.get(f"{ollama_endpoint}/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
                     if response.status == 200:
                         # Ollama is available, use it
                         logger.info("Ollama is available, using local LLM as fallback")
