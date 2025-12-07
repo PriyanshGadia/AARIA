@@ -253,7 +253,7 @@ class LLMGateway:
     
     async def generate_response(self, request: LLMRequest) -> LLMResponse:
         """
-        Generate response from LLM with privacy filtering
+        Generate response from LLM with privacy filtering and automatic fallback
         
         Args:
             request: LLM request object
@@ -282,20 +282,20 @@ class LLMGateway:
             elif request.provider == LLMProvider.LOCAL or use_local:
                 return await self._local_llm(request)
             elif request.provider == LLMProvider.OPENAI:
-                return await self._openai_llm(request)
+                return await self._openai_llm_with_fallback(request)
             elif request.provider == LLMProvider.ANTHROPIC:
-                return await self._anthropic_llm(request)
+                return await self._anthropic_llm_with_fallback(request)
             elif request.provider == LLMProvider.GEMINI:
-                return await self._gemini_llm(request)
+                return await self._gemini_llm_with_fallback(request)
             elif request.provider == LLMProvider.GROQ:
-                return await self._groq_llm(request)
+                return await self._groq_llm_with_fallback(request)
             else:
                 return await self._fallback_llm(request)
                 
         except Exception as e:
             logger.error(f"LLM generation error: {e}")
-            # Fallback on error
-            return await self._fallback_llm(request)
+            # Try Ollama fallback before using no-LLM fallback
+            return await self._try_ollama_fallback(request)
     
     async def _local_llm(self, request: LLMRequest) -> LLMResponse:
         """Generate response using local LLM (Ollama with llama2, llama3:latest, etc.)"""
@@ -515,10 +515,10 @@ class LLMGateway:
                     "parts": [{"text": request.system_prompt}]
                 }
             
-            # Make request to Gemini
+            # Make request to Gemini (using v1 API, not v1beta)
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+                    f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}",
                     json=payload,
                     timeout=30
                 ) as response:
@@ -558,6 +558,81 @@ class LLMGateway:
         except Exception as e:
             logger.warning(f"Gemini LLM failed: {e}. Using fallback.")
             return await self._fallback_llm(request)
+    
+    async def _try_ollama_fallback(self, request: LLMRequest) -> LLMResponse:
+        """
+        Try to fallback to Ollama when cloud LLM fails
+        
+        Args:
+            request: LLM request object
+            
+        Returns:
+            LLM response from Ollama or final fallback
+        """
+        try:
+            logger.info("Attempting to fallback to local Ollama...")
+            
+            # Get Ollama endpoint from config or use default
+            ollama_config = self.providers_config.get("local", {})
+            ollama_endpoint = ollama_config.get("endpoint", os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434"))
+            
+            # Check if Ollama is available
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{ollama_endpoint}/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
+                    if response.status == 200:
+                        # Ollama is available, use it
+                        logger.info("Ollama is available, using local LLM as fallback")
+                        return await self._local_llm(request)
+        except Exception as e:
+            logger.debug(f"Ollama not available for fallback: {e}")
+        
+        # Ollama not available, use final fallback
+        return await self._fallback_llm(request)
+    
+    async def _gemini_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
+        """Generate response using Gemini with automatic Ollama fallback"""
+        response = await self._gemini_llm(request)
+        
+        # If Gemini failed (confidence < 0.2 means it used fallback), try Ollama
+        if response.confidence < 0.2:
+            logger.info("Gemini failed, trying Ollama fallback...")
+            return await self._try_ollama_fallback(request)
+        
+        return response
+    
+    async def _openai_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
+        """Generate response using OpenAI with automatic Ollama fallback"""
+        response = await self._openai_llm(request)
+        
+        # If OpenAI failed (confidence < 0.2 means it used fallback), try Ollama
+        if response.confidence < 0.2:
+            logger.info("OpenAI failed, trying Ollama fallback...")
+            return await self._try_ollama_fallback(request)
+        
+        return response
+    
+    async def _anthropic_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
+        """Generate response using Anthropic with automatic Ollama fallback"""
+        response = await self._anthropic_llm(request)
+        
+        # If Anthropic failed (confidence < 0.2 means it used fallback), try Ollama
+        if response.confidence < 0.2:
+            logger.info("Anthropic failed, trying Ollama fallback...")
+            return await self._try_ollama_fallback(request)
+        
+        return response
+    
+    async def _groq_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
+        """Generate response using Groq with automatic Ollama fallback"""
+        response = await self._groq_llm(request)
+        
+        # If Groq failed (confidence < 0.2 means it used fallback), try Ollama
+        if response.confidence < 0.2:
+            logger.info("Groq failed, trying Ollama fallback...")
+            return await self._try_ollama_fallback(request)
+        
+        return response
     
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
         """
