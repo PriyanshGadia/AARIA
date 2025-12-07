@@ -41,6 +41,9 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# LLM Response Quality Constants
+LLM_FALLBACK_CONFIDENCE_THRESHOLD = 0.2  # Responses below this are considered fallback
+
 try:
     nltk.data.find('tokenizers/punkt')
     nltk.data.find('tokenizers/punkt_tab')
@@ -3247,7 +3250,7 @@ class TemporalNeuralNetwork:
                     llm_response = await llm_gateway.generate_response(llm_request)
                     
                     # Check if response is from fallback (indicates LLM failure)
-                    if llm_response.provider == "no_llm_fallback" or llm_response.confidence < 0.2:
+                    if llm_response.provider == "no_llm_fallback" or llm_response.confidence < LLM_FALLBACK_CONFIDENCE_THRESHOLD:
                         logger.warning(f"LLM returned fallback response. Provider: {llm_gateway.default_provider}")
                         # Don't use fallback response, use neuron-based generation instead
                         raise Exception("LLM unavailable, falling back to neuron generation")

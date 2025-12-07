@@ -560,15 +560,19 @@ class LLMGateway:
                             return await self._fallback_llm(request)
                     else:
                         error_text = await response.text()
-                        logger.error(f"❌ Gemini API request failed: {response.status}")
-                        logger.error(f"Error details: {error_text}")
-                        logger.error(f"Using model: {model}")
-                        logger.error("Possible issues: Invalid API key, API quota exceeded, or model not accessible")
+                        logger.error(
+                            f"❌ Gemini API request failed: {response.status}\n"
+                            f"   Error details: {error_text}\n"
+                            f"   Using model: {model}\n"
+                            f"   Possible issues: Invalid API key, API quota exceeded, or model not accessible"
+                        )
                         return await self._fallback_llm(request)
                         
         except Exception as e:
-            logger.error(f"❌ Gemini LLM failed with exception: {e}")
-            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(
+                f"❌ Gemini LLM failed with exception: {e}\n"
+                f"   Exception type: {type(e).__name__}"
+            )
             return await self._fallback_llm(request)
     
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
