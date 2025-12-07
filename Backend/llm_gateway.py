@@ -23,8 +23,6 @@ try:
     env_path = Path(__file__).parent / 'llm.env'
     if env_path.exists():
         load_dotenv(env_path)
-        logger = logging.getLogger(__name__)
-        logger.info(f"Loaded environment variables from {env_path}")
     else:
         load_dotenv()  # Load from default .env location
 except ImportError:
