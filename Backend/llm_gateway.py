@@ -403,13 +403,13 @@ class LLMGateway:
             return await self._fallback_llm(request)
     
     async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Groq API"""
+        """Generate response using Groq API (ultra-fast inference)"""
         try:
             import aiohttp
             
             groq_config = self.providers_config.get("groq", {})
             api_key = os.getenv("GROQ_API_KEY") or groq_config.get("api_key")
-            model = groq_config.get("model", "mixtral-8x7b-32768")  # Common Groq models: llama3-70b-8192, mixtral-8x7b-32768
+            model = groq_config.get("model", "llama3-70b-8192")  # Default to llama3-70b-8192
             
             if not api_key:
                 logger.warning("Groq API key not found, using fallback")
@@ -554,75 +554,6 @@ class LLMGateway:
                         
         except Exception as e:
             logger.warning(f"Gemini LLM failed: {e}. Using fallback.")
-            return await self._fallback_llm(request)
-    
-    async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Groq API (ultra-fast inference)"""
-        try:
-            import aiohttp
-            
-            groq_config = self.providers_config.get("groq", {})
-            api_key = os.getenv("GROQ_API_KEY") or groq_config.get("api_key")
-            model = groq_config.get("model", "llama3-70b-8192")
-            
-            if not api_key:
-                logger.warning("Groq API key not found, using fallback")
-                return await self._fallback_llm(request)
-            
-            # Prepare messages (Groq uses OpenAI-compatible API)
-            messages = []
-            if request.system_prompt:
-                messages.append({"role": "system", "content": request.system_prompt})
-            messages.append({"role": "user", "content": request.prompt})
-            
-            # Prepare request
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": request.max_tokens,
-                "temperature": request.temperature
-            }
-            
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Make request to Groq
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        choice = data["choices"][0]
-                        tokens = data.get("usage", {}).get("total_tokens", 0)
-                        
-                        # Update token usage
-                        self.token_usage["total"] += tokens
-                        self.token_usage["today"] += tokens
-                        
-                        return LLMResponse(
-                            text=choice["message"]["content"],
-                            provider="groq",
-                            tokens_used=tokens,
-                            confidence=0.9,
-                            metadata={
-                                "model": model, 
-                                "finish_reason": choice.get("finish_reason"),
-                                "performance": "ultra_fast"
-                            }
-                        )
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Groq request failed: {response.status} - {error_text}")
-                        return await self._fallback_llm(request)
-                        
-        except Exception as e:
-            logger.warning(f"Groq LLM failed: {e}. Using fallback.")
             return await self._fallback_llm(request)
     
     async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:

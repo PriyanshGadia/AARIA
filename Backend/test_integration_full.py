@@ -18,8 +18,8 @@ async def test_with_gemini_key():
     print("Testing AARIA with Gemini Configuration")
     print("=" * 60)
     
-    # Simulate having a Gemini API key
-    os.environ['GEMINI_API_KEY'] = 'test_key_12345'
+    # Simulate having a Gemini API key (using placeholder)
+    os.environ['GEMINI_API_KEY'] = 'test_key_placeholder_do_not_use_in_production'
     
     try:
         from llm_gateway import get_llm_gateway, LLMRequest, LLMProvider
