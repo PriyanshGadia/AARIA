@@ -128,11 +128,15 @@ class EncryptionManager:
         self.initialized = False
         self.backend = default_backend()
         self.salt_storage = {}  # Store salts for consistency
+        self.salt_file = os.path.join(os.path.dirname(__file__), ".aaria_salts.json")
         
     async def initialize(self, owner_biometric_hash: str, config: Dict[str, Any]) -> bool:
         """Initialize encryption system with owner's biometric hash"""
         try:
             self.encryption_config = config
+            
+            # Load persisted salts from disk
+            await self._load_salts()
             
             # Derive master key from biometric hash
             self.master_key = await self._derive_master_key(owner_biometric_hash)
@@ -142,6 +146,9 @@ class EncryptionManager:
             
             # Schedule key rotation
             await self._schedule_key_rotation()
+            
+            # Save salts to disk for persistence
+            await self._save_salts()
             
             self.initialized = True
             logger.info("EncryptionManager initialized successfully")
@@ -213,6 +220,51 @@ class EncryptionManager:
             self.key_rotation_schedule[tier] = rotation_date
         
         logger.info(f"Scheduled key rotation every {rotation_days} days")
+    
+    async def _load_salts(self):
+        """Load salts from persistent storage"""
+        if not os.path.exists(self.salt_file):
+            logger.info("No persisted salts found. Starting fresh.")
+            return
+        
+        try:
+            with open(self.salt_file, 'r') as f:
+                salt_data = json.load(f)
+            
+            # Convert base64 encoded salts back to bytes
+            for salt_name, salt_b64 in salt_data.items():
+                self.salt_storage[salt_name] = base64.urlsafe_b64decode(salt_b64.encode())
+            
+            logger.info(f"Loaded {len(self.salt_storage)} persisted salts")
+        except Exception as e:
+            logger.error(f"Failed to load salts: {e}")
+            logger.warning("⚠️  CRITICAL: Salt loading failed. Generating new salts will make existing encrypted data unrecoverable!")
+            logger.warning("⚠️  If you have important encrypted data, backup the salt file and fix the loading error.")
+            # Continue with empty salt_storage, new salts will be generated
+    
+    async def _save_salts(self):
+        """Save salts to persistent storage"""
+        try:
+            # Convert bytes to base64 for JSON storage
+            salt_data = {}
+            for salt_name, salt_bytes in self.salt_storage.items():
+                salt_data[salt_name] = base64.urlsafe_b64encode(salt_bytes).decode()
+            
+            # Write atomically
+            temp_file = self.salt_file + ".tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(salt_data, f, indent=2)
+            
+            # Set restrictive permissions (owner read/write only)
+            try:
+                os.chmod(temp_file, 0o600)
+            except Exception as chmod_error:
+                logger.warning(f"Could not set restrictive permissions on salt file: {chmod_error}")
+            
+            os.replace(temp_file, self.salt_file)
+            logger.debug(f"Saved {len(self.salt_storage)} salts to persistent storage")
+        except Exception as e:
+            logger.error(f"Failed to save salts: {e}")
     
     async def encrypt_data(self, data: bytes, tier: str = "owner_confidential") -> Dict[str, Any]:
         """Encrypt data with tier-specific key - FIXED FINAL CIPHERTEXT"""
@@ -1046,6 +1098,15 @@ class AssociationNetwork:
 class MemoryStorageEngine:
     """Encrypted memory storage with tiered access and persistence"""
     
+    # Tier mapping for encryption/decryption
+    TIER_ENCRYPTION_MAP = {
+        DataTier.ROOT_DATABASE: "root",
+        DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
+        DataTier.ACCESS_DATA: "access",
+        DataTier.PUBLIC_DATA: "public",
+        DataTier.TEMPORAL_CACHE: "temporal"
+    }
+    
     def __init__(self):
         self.encryption_manager = EncryptionManager()
         self.memories: Dict[str, MemoryEntry] = {}
@@ -1080,6 +1141,7 @@ class MemoryStorageEngine:
             )
             
             if not encryption_success:
+                logger.error("Failed to initialize encryption manager. Memory storage cannot proceed.")
                 return False
             
             # Load existing memories from disk
@@ -1115,7 +1177,10 @@ class MemoryStorageEngine:
                 )
                 
                 if not decryption_result.get("success"):
-                    logger.error(f"Failed to decrypt storage: {decryption_result.get('error')}")
+                    error_msg = decryption_result.get('error', 'Unknown error')
+                    logger.error(f"Failed to decrypt storage: {error_msg}")
+                    logger.warning("This may be due to changed encryption keys or corrupted storage. Starting with fresh memory.")
+                    logger.info("Previous memories cannot be recovered without the original encryption keys.")
                     return
 
                 # Deserialize the state
@@ -1187,14 +1252,7 @@ class MemoryStorageEngine:
                 serialized_data = pickle.dumps(data)
             
             # Determine encryption tier
-            tier_mapping = {
-                DataTier.ROOT_DATABASE: "root",
-                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
-                DataTier.ACCESS_DATA: "access",
-                DataTier.PUBLIC_DATA: "public",
-                DataTier.TEMPORAL_CACHE: "temporal"
-            }
-            encryption_tier = tier_mapping.get(tier, "owner_confidential")
+            encryption_tier = self.TIER_ENCRYPTION_MAP.get(tier, "owner_confidential")
             
             # Encrypt data
             encryption_result = await self.encryption_manager.encrypt_data(
@@ -1310,14 +1368,7 @@ class MemoryStorageEngine:
             }
             
             # Determine encryption tier
-            tier_mapping = {
-                DataTier.ROOT_DATABASE: "root",
-                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
-                DataTier.ACCESS_DATA: "access",
-                DataTier.PUBLIC_DATA: "public",
-                DataTier.TEMPORAL_CACHE: "temporal"
-            }
-            encryption_tier = tier_mapping.get(memory_metadata.tier, "owner_confidential")
+            encryption_tier = self.TIER_ENCRYPTION_MAP.get(memory_metadata.tier, "owner_confidential")
             
             # Decrypt data
             decryption_result = await self.encryption_manager.decrypt_data(
@@ -1408,7 +1459,7 @@ class MemoryStorageEngine:
                     if memory_id in self.memories and memory_id not in search_results:
                         search_results.append(memory_id)
             
-            # 3. Text search (Enhanced Keyword Matching)
+            # 3. Text search (Enhanced Keyword Matching with Content Search)
             if "text" in query and query["text"]:
                 text_input = query["text"].lower()
                 # Split input into significant keywords (length > 3)
@@ -1416,7 +1467,7 @@ class MemoryStorageEngine:
                 text_results = []
                 
                 for memory_id, memory_entry in self.memories.items():
-                    # Check tags
+                    # Check tags first (faster)
                     memory_tags = {t.lower() for t in memory_entry.metadata.tags}
                     
                     # Match if ANY keyword appears in ANY tag (Fuzzy association)
@@ -1427,6 +1478,42 @@ class MemoryStorageEngine:
                     # Also check if tags appear in the text input (Reverse association)
                     if any(tag in text_input for tag in memory_tags):
                         text_results.append(memory_id)
+                        continue
+                    
+                    # NEW: Search within decrypted memory content for better recall
+                    # This is essential for finding specific facts like dates, names, etc.
+                    try:
+                        # Check cache first
+                        if memory_id in self.memory_cache:
+                            cached_data, _ = self.memory_cache[memory_id]
+                            # Cached data is already a string, no need for str() conversion
+                            content = cached_data.lower() if isinstance(cached_data, str) else str(cached_data).lower()
+                        else:
+                            # Decrypt memory to search content
+                            pkg = {
+                                "encrypted_data": base64.urlsafe_b64encode(memory_entry.encrypted_data).decode(),
+                                "metadata": memory_entry.encryption_metadata
+                            }
+                            # Use class constant for tier mapping
+                            enc_tier = self.TIER_ENCRYPTION_MAP.get(memory_entry.metadata.tier, "owner_confidential")
+                            dec = await self.encryption_manager.decrypt_data(pkg, enc_tier)
+                            
+                            if dec.get("success"):
+                                decrypted_text = dec["decrypted_data"].decode()
+                                content = decrypted_text.lower()
+                                # Cache the decoded string for future searches
+                                self.memory_cache[memory_id] = (decrypted_text, datetime.now())
+                            else:
+                                continue
+                        
+                        # Search for keywords in content
+                        if any(kw in content for kw in keywords):
+                            text_results.append(memory_id)
+                            
+                    except Exception as e:
+                        # Log error but continue searching other memories
+                        logger.debug(f"Could not search content of memory {memory_id}: {e}")
+                        continue
 
                 search_methods.append(("text_keyword", len(text_results)))
                 search_results.extend(text_results[:max_results])

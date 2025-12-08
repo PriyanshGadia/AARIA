@@ -27,6 +27,8 @@ Thumbs.db
 Backend/.aaria_config.db
 Backend/.test_aaria_config.db
 Backend/.aaria_salt
+Backend/.aaria_salts.json
+Backend/memory_store.enc
 *.log
 aaria_system.log
 
