@@ -449,7 +449,7 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # Note: WindowsSelectorEventLoopPolicy and set_event_loop_policy are deprecated in Python 3.16+
+        # Note: WindowsSelectorEventLoopPolicy and set_event_loop_policy are deprecated in Python 3.14+
         # The default event loop policy should work for most cases on Windows 10+
         # If running on older Windows versions and encountering event loop issues,
         # consider using ProactorEventLoop which is the default on Windows since Python 3.8

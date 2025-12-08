@@ -238,6 +238,8 @@ class EncryptionManager:
             logger.info(f"Loaded {len(self.salt_storage)} persisted salts")
         except Exception as e:
             logger.error(f"Failed to load salts: {e}")
+            logger.warning("⚠️  CRITICAL: Salt loading failed. Generating new salts will make existing encrypted data unrecoverable!")
+            logger.warning("⚠️  If you have important encrypted data, backup the salt file and fix the loading error.")
             # Continue with empty salt_storage, new salts will be generated
     
     async def _save_salts(self):
@@ -252,6 +254,12 @@ class EncryptionManager:
             temp_file = self.salt_file + ".tmp"
             with open(temp_file, 'w') as f:
                 json.dump(salt_data, f, indent=2)
+            
+            # Set restrictive permissions (owner read/write only)
+            try:
+                os.chmod(temp_file, 0o600)
+            except Exception as chmod_error:
+                logger.warning(f"Could not set restrictive permissions on salt file: {chmod_error}")
             
             os.replace(temp_file, self.salt_file)
             logger.debug(f"Saved {len(self.salt_storage)} salts to persistent storage")
