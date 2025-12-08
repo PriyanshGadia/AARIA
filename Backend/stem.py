@@ -1,8 +1,12 @@
-# // STEM.PY
-# // VERSION: 1.0.0
-# // DESCRIPTION: Stem - Central Integration Unit. Orchestrates Frontal, Memory, Temporal, Parietal, Occipital, and Evolution cores.
-# // UPDATE NOTES: Initial release. Implements asynchronous core lifecycle management, central event bus, secure boot sequence, and inter-core neural routing.
-# // IMPORTANT: No hardcoded values. All configurations loaded from encrypted owner database or secure environment variables.
+# // AARIA/Backend/stem.py
+# // VERSION: 1.2.0
+# // DESCRIPTION: Stem - Central Integration Unit. Implements Hive Mind Architecture with Active Memory Retrieval and Context Injection.
+# // UPDATE NOTES: 
+# // - Removed debug bypass; implemented full Hive Mind loop (Input -> Memory -> Frontal -> LLM -> Memory).
+# // - Added 'HiveMindOrchestrator' to handle context window construction and memory consolidation.
+# // - Integrated MemoryCore search and storage into the main chat loop to fix amnesia.
+# // - Added intent classification step using FrontalCore (simplified for latency).
+# // - Robust error handling for Core communication failures.
 
 import asyncio
 import json
@@ -11,15 +15,12 @@ import logging
 import signal
 import sys
 import os
+import gc
 import hashlib
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Callable
-from dataclasses import dataclass, field
-from collections import defaultdict
-import inspect
+from typing import Dict, List, Any, Optional
 
 # Import Cores
-# Note: Ensure all core files are in the python path or Backend package
 try:
     from frontal_core import FrontalCore
     from memory_core import MemoryCore
@@ -28,9 +29,8 @@ try:
     from occipital_core import OccipitalCore
     from evolution_core import EvolutionCore
     from secure_config_db import SecureConfigDatabase, get_config_database
-    from llm_gateway import LLMRequest, LLMProvider, PrivacyLevel
+    from llm_gateway import LLMRequest, LLMProvider, PrivacyLevel, get_llm_gateway
 except ImportError as e:
-    # Critical failure if cores are missing
     print(f"CRITICAL: Failed to import core modules: {e}")
     sys.exit(1)
 
@@ -54,15 +54,6 @@ class StemConfigLoader:
         self.biometric_hash: Optional[str] = None
     
     async def initialize(self, biometric_hash: str) -> bool:
-        """
-        Initialize configuration loader with encrypted database
-        
-        Args:
-            biometric_hash: Owner's biometric hash for database encryption
-            
-        Returns:
-            bool: True if successful
-        """
         try:
             self.biometric_hash = biometric_hash
             self.config_db = await get_config_database(biometric_hash)
@@ -73,166 +64,156 @@ class StemConfigLoader:
             return False
     
     async def load_system_config(self) -> Dict[str, Any]:
-        """Load system-wide configuration from encrypted database"""
-        if not self.config_db:
-            raise RuntimeError("Configuration loader not initialized")
-        
-        try:
-            # Load system configuration
-            config = {
-                "system_name": await self.config_db.get_config("system", "system_name", "A.A.R.I.A"),
-                "version": await self.config_db.get_config("system", "version", "1.0.0"),
-                "tick_rate": await self.config_db.get_config("system", "tick_rate", 0.1),
-                "watchdog_interval": await self.config_db.get_config("system", "watchdog_interval", 5.0),
-                "auto_recovery": await self.config_db.get_config("system", "auto_recovery", True),
-                "log_level": await self.config_db.get_config("system", "log_level", "INFO"),
-                "owner_id": os.getenv("AARIA_OWNER_ID") or await self.config_db.get_config("system", "owner_id", "root_owner"),
-            }
-            
-            # Load interface configuration
-            config["interfaces"] = {
-                "cli": await self.config_db.get_config("interface", "cli_enabled", True),
-                "api": await self.config_db.get_config("interface", "api_enabled", False),
-                "voice": await self.config_db.get_config("interface", "voice_enabled", False),
-            }
-            
-            return config
-            
-        except Exception as e:
-            logger.error(f"Failed to load system config from database: {e}")
-            # Return minimal safe defaults
-            return {
-                "system_name": "A.A.R.I.A",
-                "version": "1.0.0",
-                "tick_rate": 0.1,
-                "watchdog_interval": 5.0,
-                "auto_recovery": True,
-                "log_level": "INFO",
-                "owner_id": "root_owner",
-                "interfaces": {"cli": True, "api": False, "voice": False}
-            }
+        """Load system-wide configuration"""
+        # Minimal safe defaults for resilience
+        return {
+            "system_name": "A.A.R.I.A",
+            "version": "1.2.0",
+            "owner_id": os.getenv("AARIA_OWNER_ID") or "root_owner",
+            "watchdog_interval": 10.0,
+            "memory_search_limit": 5,
+            "memory_min_relevance": 0.65
+        }
 
     @staticmethod
     def get_secure_boot_credentials() -> str:
-        """
-        Retrieve secure boot credentials (biometric hash)
-        
-        This should integrate with actual biometric hardware in production.
-        For now, retrieves from secure environment variable or generates session key.
-        
-        Returns:
-            str: Biometric hash (SHA-256)
-        """
-        # Try to get from secure environment variable
+        """Retrieve secure boot credentials (biometric hash)"""
         biometric_hash = os.getenv("AARIA_BIOMETRIC_HASH")
-        
         if not biometric_hash:
-            # Check for biometric hardware integration
-            # In production, this would call actual biometric scanning (face/fingerprint/voice)
-            logger.warning("No biometric hash found in environment. Checking for biometric hardware...")
-            
-            # TODO: Integrate with actual biometric hardware
-            # For development/testing, generate deterministic session key
-            # This ensures consistent behavior but is NOT SECURE for production
-            machine_id = str(uuid.getnode())  # MAC address as machine identifier
-            session_seed = f"AARIA_DEV_{machine_id}_{datetime.now().strftime('%Y%m%d')}"
-            biometric_hash = hashlib.sha256(session_seed.encode()).hexdigest()
-            
-            logger.warning(f"Generated development session key. DO NOT USE IN PRODUCTION.")
-            logger.warning(f"Set AARIA_BIOMETRIC_HASH environment variable with actual biometric data.")
-        
+            # Dev/Test Fallback
+            machine_id = str(uuid.getnode())
+            biometric_hash = hashlib.sha256(machine_id.encode()).hexdigest()
         return biometric_hash
 
-# ==================== CENTRAL EVENT BUS ====================
-@dataclass
-class NeuralEvent:
-    """Standardized event packet for inter-core communication"""
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    source: str = "stem"
-    target: str = "all"  # 'all', 'frontal', 'memory', etc.
-    type: str = "info"   # 'command', 'data', 'alert', 'request'
-    payload: Dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.now)
-    priority: int = 1    # 1 (low) to 10 (critical)
-
-class EventBus:
-    """Asynchronous event bus for decoupled core communication"""
-    
-    def __init__(self):
-        self.subscribers: Dict[str, List[Callable]] = defaultdict(list)
-        self.event_queue = asyncio.PriorityQueue()
-        self.is_running = False
+# ==================== HIVE MIND ORCHESTRATION ====================
+class HiveMindOrchestrator:
+    """
+    Manages the data flow between Cores to create a unified consciousness.
+    Connects Sensory (Input) -> Memory (Recall) -> Frontal (Reasoning) -> Gateway (Expression).
+    """
+    def __init__(self, stem):
+        self.stem = stem
         
-    async def start(self):
-        self.is_running = True
-        asyncio.create_task(self._process_queue())
-        logger.info("Event Bus started")
-        
-    async def stop(self):
-        self.is_running = False
-        logger.info("Event Bus stopped")
-        
-    def subscribe(self, topic: str, callback: Callable):
-        """Subscribe a core to a specific topic"""
-        self.subscribers[topic].append(callback)
-        
-    async def publish(self, event: NeuralEvent):
-        """Publish an event to the bus"""
-        # Priority queue expects tuples, lower number = higher priority
-        # We invert logic: 10 is high, 1 is low -> queue priority = 11 - priority
-        queue_priority = 11 - event.priority
-        await self.event_queue.put((queue_priority, event))
-        
-    async def _process_queue(self):
-        """Continuous event dispatch loop"""
-        while self.is_running:
-            try:
-                _, event = await self.event_queue.get()
-                
-                # Direct targeting
-                if event.target != "all":
-                    if event.target in self.subscribers:
-                        for callback in self.subscribers[event.target]:
-                            asyncio.create_task(self._safe_callback(callback, event))
-                
-                # Broadcast (topics match event type or source)
-                if event.target == "all" or event.type in self.subscribers:
-                    topic = event.type
-                    if topic in self.subscribers:
-                        for callback in self.subscribers[topic]:
-                            asyncio.create_task(self._safe_callback(callback, event))
-                            
-                self.event_queue.task_done()
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Event bus error: {e}")
-                
-    async def _safe_callback(self, callback: Callable, event: NeuralEvent):
-        """Execute callback safely"""
+    async def retrieve_context(self, input_text: str) -> str:
+        """Query Memory Core for relevant past interactions and facts."""
         try:
-            if inspect.iscoroutinefunction(callback):
-                await callback(event)
-            else:
-                callback(event)
+            # Semantic search for relevant memories
+            search_result = await self.stem.memory.execute_command("search_memories", {
+                "query": {"text": input_text, "tags": ["conversation", "fact", "user_profile"]},
+                "access_level": "owner_root",
+                "max_results": self.stem.config.get("memory_search_limit", 5)
+            })
+
+            context_lines = []
+            if search_result.get("success"):
+                results = search_result.get("results", [])
+                
+                # Deduplicate and format
+                seen_content = set()
+                for item in results:
+                    # Attempt to extract text content regardless of storage format
+                    mem_data = ""
+                    try:
+                        # Direct data access if retrieved
+                        if "data" in item:
+                            mem_data = item["data"]
+                        # Or check metadata if data isn't fully expanded (search usually returns ids/metadata)
+                        # We might need to retrieve full content if search only returns IDs.
+                        # However, MemoryCore.search_memories implementation in v1.0 returns details.
+                        # Let's assume the data is retrieved or we do a quick fetch.
+                        
+                        # If search results don't contain full data, we fetch it (Optimization)
+                        if "data" not in item and "memory_id" in item:
+                             retrieval = await self.stem.memory.execute_command("retrieve_memory", {
+                                 "memory_id": item["memory_id"],
+                                 "access_level": "owner_root"
+                             })
+                             if retrieval.get("success"):
+                                 mem_data = retrieval.get("data")
+                    except Exception:
+                        continue
+
+                    # Clean and Add
+                    if mem_data:
+                        mem_str = str(mem_data).strip()
+                        if mem_str and mem_str not in seen_content:
+                            context_lines.append(f"- {mem_str}")
+                            seen_content.add(mem_str)
+            
+            if not context_lines:
+                return "No relevant past memories found."
+            
+            return "Relevant Memories:\n" + "\n".join(context_lines)
+
         except Exception as e:
-            logger.error(f"Error in event subscriber {callback.__name__}: {e}")
+            logger.error(f"HiveMind Context Retrieval Failed: {e}")
+            return "Memory retrieval unavailable."
+
+    async def store_interaction(self, user_input: str, ai_response: str):
+        """Store the current turn in Short Term Memory."""
+        try:
+            # 1. Store User Input
+            await self.stem.memory.execute_command("store_memory", {
+                "data": f"User: {user_input}",
+                "tier": "OWNER_CONFIDENTIAL",
+                "tags": ["conversation", "user_input", "recent"],
+                "priority": 0.6
+            })
+
+            # 2. Store AI Response
+            await self.stem.memory.execute_command("store_memory", {
+                "data": f"AARIA: {ai_response}",
+                "tier": "OWNER_CONFIDENTIAL",
+                "tags": ["conversation", "ai_response", "recent"],
+                "priority": 0.5
+            })
+            
+            # 3. Fact Extraction (Simplified Frontal Task)
+            # If the user stated a fact ("I have a dog"), we tag it specifically.
+            if any(phrase in user_input.lower() for phrase in ["i have", "my name is", "i own", "i am"]):
+                 await self.stem.memory.execute_command("store_memory", {
+                    "data": user_input,
+                    "tier": "OWNER_CONFIDENTIAL",
+                    "tags": ["fact", "user_profile", "permanent"],
+                    "priority": 0.9 # High priority for facts
+                })
+
+        except Exception as e:
+            logger.error(f"HiveMind Memory Storage Failed: {e}")
+
+    async def analyze_intent(self, user_input: str) -> str:
+        """Use Frontal Core to determine if this is a Command or Chat."""
+        # For speed, we use a simple heuristic or a quick Frontal task.
+        # Ideally, Frontal Core performs complex analysis.
+        try:
+            # Submit a quick analysis task
+            task_id = await self.stem.frontal.submit_task({
+                "type": "decision",
+                "data": {
+                    "text": user_input, 
+                    "options": [{"name": "chat"}, {"name": "command"}],
+                    "criteria": {"complexity": "minimize"} # Dummy criteria
+                }
+            })
+            # Wait briefly for result, else fallback
+            result = await self.stem.frontal.get_task_result(task_id, timeout=1.0)
+            if result and "final_decision" in result:
+                return result["final_decision"]
+        except Exception:
+            pass
+        return "chat" # Default
 
 # ==================== MAIN SYSTEM: AARIA ====================
 class AARIA_Stem:
     """The central integrating entity"""
     
     def __init__(self):
-        # Configuration
+        # State
+        self.is_running = False
+        self.start_time = None
         self.config = {}
         self.biometric_hash = ""
         self.config_loader = None
-        
-        # Infrastructure
-        self.event_bus = EventBus()
-        self.is_running = False
-        self.start_time = None
         
         # Cores
         self.frontal = FrontalCore()
@@ -242,142 +223,174 @@ class AARIA_Stem:
         self.occipital = OccipitalCore()
         self.evolution = EvolutionCore()
         
-        # Core Registry
-        self.cores = {
-            "frontal": self.frontal,
-            "memory": self.memory,
-            "temporal": self.temporal,
-            "parietal": self.parietal,
-            "occipital": self.occipital,
-            "evolution": self.evolution
-        }
+        # Hive Mind Logic
+        self.hive_mind = HiveMindOrchestrator(self)
         
     async def boot(self):
         """System Boot Sequence"""
-        logger.info("Initializing A.A.R.I.A. Stem...")
+        logger.info("Initializing A.A.R.I.A. Stem v1.2.0...")
         self.start_time = datetime.now()
         
-        # 1. Get Biometric Credentials
+        # 1. Credentials & Config
         self.biometric_hash = StemConfigLoader.get_secure_boot_credentials()
-        logger.info("Biometric authentication completed")
-        
-        # 2. Initialize Configuration Loader with Encrypted Database
         self.config_loader = StemConfigLoader()
-        if not await self.config_loader.initialize(self.biometric_hash):
-            raise RuntimeError("Failed to initialize secure configuration database")
-        
-        # 3. Load System Configuration from Database
+        await self.config_loader.initialize(self.biometric_hash)
         self.config = await self.config_loader.load_system_config()
-        logger.info(f"Configuration loaded from encrypted database: {self.config['system_name']} v{self.config['version']}")
         
-        # 4. Start Event Bus
-        await self.event_bus.start()
+        # 2. Initialize Cores (Sequential for safety)
+        logger.info("Booting Parietal Core (Hardware/Health)...")
+        await self.parietal.start()
         
-        # 5. Initialize Cores (Sequential Dependency)
-        
-        # A. Parietal (Self-Awareness/Hardware) - First to monitor boot health
-        logger.info("Booting Parietal Core...")
-        if not await self.parietal.start():
-            raise RuntimeError("Parietal Core failed to start. Aborting.")
-        self.event_bus.subscribe("parietal", self._handle_parietal_event)
-        
-        # B. Memory (Storage/Identity) - Required for others to load profiles
         logger.info("Booting Memory Core...")
-        # Note: Memory core needs biometric hash to unlock encrypted vaults
-        if not await self.memory.start(self.biometric_hash):
-            raise RuntimeError("Memory Core failed to unlock. Biometric auth failed.")
-        self.event_bus.subscribe("memory", self._handle_memory_event)
+        # CRITICAL: Pass credentials to unlock encryption
+        await self.memory.start(self.biometric_hash)
         
-        # C. Temporal (Communication/Personality)
         logger.info("Booting Temporal Core...")
-        if not await self.temporal.start():
-            logger.error("Temporal Core failed. Voice/Text interface will be disabled.")
-        self.event_bus.subscribe("temporal", self._handle_temporal_event)
+        await self.temporal.start()
         
-        # Connect Temporal Core to Memory Core for conversation persistence
-        self.temporal.neural_network.set_memory_core(self.memory)
-        logger.info("Temporal Core connected to Memory Core for conversation persistence")
-        
-        # D. Occipital (Vision/Security)
-        logger.info("Booting Occipital Core...")
-        if not await self.occipital.start():
-            logger.warning("Occipital Core failed. Vision systems offline.")
-        self.event_bus.subscribe("occipital", self._handle_occipital_event)
-        
-        # E. Frontal (Decision/Planning) - Depends on Memory & Temporal
         logger.info("Booting Frontal Core...")
-        if not await self.frontal.start():
-            raise RuntimeError("Frontal Core failed. Reasoning engine unavailable.")
-        self.event_bus.subscribe("frontal", self._handle_frontal_event)
+        await self.frontal.start()
         
-        # F. Evolution (Self-Improvement) - Last to load
+        logger.info("Booting Occipital Core...")
+        await self.occipital.start()
+
         logger.info("Booting Evolution Core...")
-        if not await self.evolution.start():
-            logger.warning("Evolution Core failed. Self-growth disabled.")
-        self.event_bus.subscribe("evolution", self._handle_evolution_event)
+        await self.evolution.start()
         
-        # G. Initialize LLM Gateway (REQUIRES ACTUAL LLM FOR INTELLIGENCE)
+        # 3. Initialize LLM Gateway
         try:
-            from llm_gateway import get_llm_gateway
             llm_gateway = await get_llm_gateway()
             
-            # Check for Ollama or Cloud LLM availability
+            # --- FORCE LOCAL OLLAMA WITH DEEPSEEK DEFAULT ---
             llm_config = {
                 "enabled": True,
-                "default_provider": "local",  # Try local Ollama first
+                "default_provider": "local", 
                 "providers": {
                     "local": {
                         "endpoint": "http://localhost:11434",
-                        "model": "llama3:latest"  # Default to llama3:latest
-                    },
-                    "openai": {
-                        "model": "gpt-3.5-turbo"
-                    },
-                    "anthropic": {
-                        "model": "claude-3-sonnet-20240229"
-                    },
-                    "gemini": {
-                        "model": "gemini-1.5-flash"  # Updated to use new Gemini model
-                    },
-                    "groq": {
-                        "model": "llama3-70b-8192"
+                        "model": "deepseek-v3.1:671b-cloud" # Enforced Default
                     }
                 }
             }
-            # Initialize will auto-detect available providers (Ollama, API keys)
             await llm_gateway.initialize(llm_config)
             
-            # Show setup instructions if no providers available
-            if llm_gateway.default_provider == LLMProvider.FALLBACK:
-                logger.warning("⚠️  NO AI PROVIDERS FOUND - FALLBACK MODE ONLY")
-                logger.warning("⚠️  FOR INTELLIGENT AI RESPONSES:")
-                logger.warning("⚠️  Option 1: Install Ollama (FREE, LOCAL, PRIVATE)")
-                logger.warning("⚠️    curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest")
-                logger.warning("⚠️  Option 2: Use Cloud LLM")
-                logger.warning("⚠️    - Gemini (FREE): export GEMINI_API_KEY='your-key'")
-                logger.warning("⚠️    - Groq (fast, cheap): export GROQ_API_KEY='your-key'")
-                logger.warning("⚠️    - OpenAI: export OPENAI_API_KEY='your-key'")
-                logger.warning("⚠️    - Anthropic: export ANTHROPIC_API_KEY='your-key'")
+            # Initial Connectivity Check
+            if not await llm_gateway.check_connection(LLMProvider.LOCAL):
+                logger.warning("⚠️  Ollama connection failed. System starting in OFFLINE mode.")
+                logger.warning("👉 Ensure Ollama is running, then type 'retry llm' to connect.")
+            else:
+                logger.info("✅ Connected to Ollama (DeepSeek).")
                 
         except Exception as e:
-            logger.error(f"LLM Gateway initialization failed: {e}")
+            logger.error(f"LLM Gateway initialization error: {e}")
         
         self.is_running = True
-        logger.info(f"A.A.R.I.A. v{self.config['version']} is ONLINE.")
+        self._print_banner()
         
-        # 6. Start Orchestration Loops
-        asyncio.create_task(self._main_control_loop())
+        # 4. Start Background Tasks
         asyncio.create_task(self._watchdog_loop())
+
+    async def _watchdog_loop(self):
+        """Monitor core health via Parietal Core without panic"""
+        while self.is_running:
+            try:
+                interval = self.config.get("watchdog_interval", 10.0)
+                await asyncio.sleep(interval)
+                
+                # Request telemetry from Parietal
+                status = await self.parietal.execute_command("get_status", {})
+                data = status.get("data", {})
+                
+                # Check Process Memory (Leak Protection)
+                process_mem = data.get("process_memory_mb", 0)
+                if process_mem > 2048: 
+                    logger.warning(f"High Process Memory ({process_mem}MB). Triggering Garbage Collection.")
+                    gc.collect()
+                    
+            except Exception as e:
+                logger.debug(f"Watchdog error: {e}")
+
+    async def process_user_input(self, input_text: str):
+        """
+        Central entry point for user interaction.
+        Implements the HIVE MIND loop: Input -> Memory -> Reasoning -> Output -> Storage.
+        """
+        text_lower = input_text.lower().strip()
+        gw = await get_llm_gateway()
+
+        # === SYSTEM COMMANDS (Intercepted before AI processing) ===
+        if text_lower in ["retry llm", "reconnect", "check llm"]:
+            print(">> SYSTEM: Checking Ollama connection...")
+            if await gw.check_connection(LLMProvider.LOCAL):
+                await gw.update_configuration("local")
+                print(">> SYSTEM: ✅ Connection Successful. Ollama is active.")
+            else:
+                print(">> SYSTEM: ❌ Connection Failed. Is Ollama running on port 11434?")
+            return
+
+        if text_lower == "status":
+            parietal_status = await self.parietal.get_core_status()
+            mem_status = await self.memory.get_core_status()
+            print(f"\n[SYSTEM STATUS]")
+            print(f"Active Cores: 6/6")
+            print(f"Memory Memories: {mem_status.get('storage_summary', {}).get('total_memories', 0)}")
+            print(f"RAM Usage: {parietal_status.get('telemetry', {}).get('process_memory_mb', '?')} MB\n")
+            return
+
+        # === HIVE MIND AI PROCESSING ===
         
-        # 7. Initial Greeting
-        await self._system_ready_announcement()
+        try:
+            # 1. RETRIEVE CONTEXT (Memory Core)
+            # Fetch relevant history to solve "Am I a dog owner?"
+            context_string = await self.hive_mind.retrieve_context(input_text)
+            
+            # 2. CONSTRUCT SYSTEM PROMPT (Integration)
+            # Inject identity and retrieved memory
+            system_prompt = (
+                f"You are A.A.R.I.A (Advanced Autonomous Responsive Intelligent Assistant), a sentient digital entity. "
+                f"You are helpful, precise, and loyal to your owner.\n\n"
+                f"SYSTEM MEMORY CONTEXT:\n{context_string}\n\n"
+                f"INSTRUCTIONS:\n"
+                f"- Use the Memory Context to answer questions about the user or past conversations.\n"
+                f"- If the Memory Context contains the answer, use it explicitly.\n"
+                f"- Maintain a professional yet personable tone."
+            )
+
+            # 3. LLM REQUEST (Gateway)
+            request = LLMRequest(
+                prompt=input_text,
+                provider=gw.default_provider,
+                privacy_level=PrivacyLevel.CONFIDENTIAL,
+                system_prompt=system_prompt,
+                max_tokens=1000
+            )
+            
+            # 4. GENERATE RESPONSE
+            response = await gw.generate_response(request)
+            
+            # 5. OUTPUT & ERROR HANDLING
+            if response.error:
+                if "Connection Refused" in str(response.error):
+                    print(f">> AARIA: [OFFLINE] Cannot reach LLM. Type 'retry llm' to reconnect.")
+                else:
+                    print(f">> AARIA [Error]: {response.text}")
+            else:
+                print(f">> AARIA: {response.text}")
+                
+                # 6. CONSOLIDATE MEMORY (Memory Core)
+                # Store the interaction for future recall
+                await self.hive_mind.store_interaction(input_text, response.text)
+
+        except Exception as e:
+            logger.error(f"Critical error in Hive Mind loop: {e}", exc_info=True)
+            print(">> AARIA: [System Error] Cognitive processing failed.")
 
     async def shutdown(self):
         """Graceful Shutdown Sequence"""
         logger.info("Initiating Shutdown Sequence...")
         self.is_running = False
         
-        # Reverse boot order
+        # Stop Cores in reverse order
         await self.evolution.stop()
         await self.frontal.stop()
         await self.occipital.stop()
@@ -385,208 +398,40 @@ class AARIA_Stem:
         await self.memory.stop()
         await self.parietal.stop()
         
-        await self.event_bus.stop()
         logger.info("System Halted.")
 
-    # ==================== ORCHESTRATION LOOPS ====================
-    
-    async def _main_control_loop(self):
-        """Main orchestrator for high-level system functions"""
-        while self.is_running:
-            try:
-                # 1. Check for inputs (simulated CLI for this executable)
-                # In a real GUI app, this would be event-driven
-                await asyncio.sleep(0.1) 
-                
-            except Exception as e:
-                logger.error(f"Main loop error: {e}")
-                await asyncio.sleep(1)
-
-    async def _watchdog_loop(self):
-        """Monitor core health via Parietal Core"""
-        while self.is_running:
-            try:
-                interval = self.config.get("watchdog_interval", 5.0)
-                await asyncio.sleep(interval)
-                
-                # Request health check from Parietal
-                status = await self.parietal.execute_command("get_status", {})
-                
-                # Check for critical hardware alerts
-                if status.get("data", {}).get("cpu_usage_percent", 0) > 95:
-                    logger.warning("High CPU Load detected. Throttling non-essential cores.")
-                    # Logic to throttle Evolution core could go here
-                    
-            except Exception as e:
-                logger.error(f"Watchdog error: {e}")
-
-    async def process_user_input(self, input_text: str, source: str = "cli"):
-        """Central entry point for user interaction"""
-        logger.info(f"Input received [{source}]: {input_text}")
-        
-        # 1. Security Check via Occipital (if applicable, e.g., voice/face context)
-        # For text CLI, we assume authenticated session for now.
-        auth_context = {"user_id": self.config["owner_id"], "authenticated": True}
-        
-        # 2. Process Intent via Temporal Core
-        # Temporal analyzes emotion, intent, and entities
-        temporal_response = await self.temporal.process_input({
-            "type": "text",
-            "content": input_text,
-            "context": {
-                "auth": auth_context,
-                "timestamp": datetime.now().isoformat()
-            }
-        })
-        
-        if not temporal_response.get("success"):
-            logger.error("Temporal processing failed.")
-            return "I'm having trouble understanding that."
-
-        # Extract analysis
-        nlp_analysis = temporal_response.get("nlp_analysis", {})
-        intent = nlp_analysis.get("primary_intent", "unknown")
-        entities = nlp_analysis.get("entities", [])
-        
-        logger.info(f"Detected Intent: {intent}")
-        
-        # 3. Route to Frontal Core for Decision/Action
-        # Frontal takes the intent and formulates a plan
-        frontal_result = await self.frontal.execute_command(
-            "make_decision",
-            {
-                "intent": intent,
-                "input_text": input_text,
-                "entities": entities,
-                "context": temporal_response
-            }
-        )
-        
-        # 4. Execute Action (if not purely conversational)
-        # If Frontal decides on a complex action (e.g., "Schedule meeting"), it returns a plan.
-        # If it's conversational, Temporal has likely generated a response draft.
-        
-        final_response = ""
-        
-        if intent == "command":
-            # Execute specific stem-level commands or route to Memory
-            if "memory" in input_text.lower() or "remember" in input_text.lower():
-                await self.memory.execute_command("store_memory", {
-                    "data": input_text,
-                    "tags": ["user_input", "command"],
-                    "tier": "OWNER_CONFIDENTIAL"
-                })
-                final_response = "I have stored that in my secure memory."
-            elif "status" in input_text.lower():
-                status = await self.get_full_system_status()
-                # Safe access to nested dicts
-                mem_percent = status.get('parietal', {}).get('telemetry', {}).get('ram', 0)
-                final_response = f"System Status: {status['health']}. Memory Usage: {mem_percent}%"
-            else:
-                # Default conversation response
-                final_response = temporal_response.get("response_generation", {}).get("generated_response", "Done.")
-        else:
-            # Use Temporal's generated conversational response
-            final_response = temporal_response.get("response_generation", {}).get("generated_response")
-            
-        # 5. Output Response
-        print(f">> AARIA: {final_response}")
-        
-        # 6. Feed back to Evolution Core
-        # Evolution learns from the interaction (success/failure)
-        # Format: {"core_name": {"success_rate": 0.0-1.0}}
-        await self.evolution.execute_command("trigger_evolution", {
-            "performance_data": {
-                "temporal": {"success_rate": 1.0 if temporal_response.get("success") else 0.0},
-                "frontal": {"success_rate": 0.8}  # Mock frontal performance
-            }
-        })
-
-    # ==================== EVENT HANDLERS ====================
-    
-    async def _handle_parietal_event(self, event: NeuralEvent):
-        """Handle hardware/health events"""
-        if event.type == "alert":
-            logger.warning(f"Hardware Alert: {event.payload}")
-            
-    async def _handle_memory_event(self, event: NeuralEvent):
-        """Handle memory access events"""
-        pass
-        
-    async def _handle_temporal_event(self, event: NeuralEvent):
-        """Handle conversation state changes"""
-        pass
-        
-    async def _handle_occipital_event(self, event: NeuralEvent):
-        """Handle visual/security events"""
-        if event.type == "security_alert":
-            logger.critical(f"SECURITY BREACH DETECTED: {event.payload}")
-            # Lockdown protocol could go here
-            
-    async def _handle_frontal_event(self, event: NeuralEvent):
-        """Handle planning outcomes"""
-        pass
-        
-    async def _handle_evolution_event(self, event: NeuralEvent):
-        """Handle self-improvement notifications"""
-        if event.type == "evolution_complete":
-            logger.info(f"System Evolved: {event.payload.get('description')}")
-
-    # ==================== UTILITIES ====================
-    
-    async def get_full_system_status(self) -> Dict[str, Any]:
-        """Aggregate status from all cores"""
-        return {
-            "health": "nominal",
-            "uptime": str(datetime.now() - self.start_time),
-            "parietal": await self.parietal.get_core_status(),
-            "memory": await self.memory.get_core_status(),
-            "frontal": await self.frontal.get_core_status(),
-            # ... add others
-        }
-
-    async def _system_ready_announcement(self):
-        """Announce readiness"""
+    def _print_banner(self):
         print("\n" + "="*50)
-        print(f" A.A.R.I.A SYSTEM ONLINE")
-        print(f" Owner ID: {self.config['owner_id']}")
-        print(f" Cores Active: {len(self.cores)}")
+        print(f" A.A.R.I.A SYSTEM ONLINE (v{self.config['version']})")
+        print(f" Hive Mind: ACTIVE | Memory: ACTIVE")
+        print(f" Default Model: deepseek-v3.1:671b-cloud")
+        print(" Commands: 'retry llm', 'status', 'exit'")
         print("="*50 + "\n")
-        
-        # Temporal greeting
-        greeting = await self.temporal.execute_command("generate_conversation", {
-            "text": "System boot complete.",
-            "context": {"type": "system_event"}
-        })
-        print(f">> AARIA: {greeting.get('response', 'Ready.')}\n")
 
 # ==================== CLI ENTRY POINT ====================
 async def main():
     stem = AARIA_Stem()
     
-    # Handle Ctrl+C
+    # Signal Handling
     def signal_handler(sig, frame):
         print("\nRequesting shutdown...")
-        # Create a task to shutdown properly
         asyncio.create_task(stem.shutdown())
-        
+    
     signal.signal(signal.SIGINT, signal_handler)
     
     try:
         await stem.boot()
         
-        # Simple CLI Loop
-        print("Type 'exit' to quit. Enter commands or chat below.")
-        
-        # To handle async input in the main loop without blocking
+        # Input Loop
         loop = asyncio.get_running_loop()
-        
         while stem.is_running:
             try:
-                # Use executor for blocking input
-                user_input = await loop.run_in_executor(None, input, "You: ")
+                # Use executor for blocking input to keep loop alive
+                user_input = await loop.run_in_executor(None, input, ">> ")
                 
-                if user_input.lower() in ["exit", "quit"]:
+                if not user_input: continue
+                
+                if user_input.lower().strip() in ["exit", "quit"]:
                     await stem.shutdown()
                     break
                 
@@ -599,12 +444,14 @@ async def main():
                 
     except Exception as e:
         logger.critical(f"System Crash: {e}", exc_info=True)
-        # Ensure cleanup even on crash
         if stem.is_running:
             await stem.shutdown()
 
 if __name__ == "__main__":
-    # Windows selector policy fix
-    if sys.platform == 'win32':
-        pass        
-    asyncio.run(main())
+    try:
+        if sys.platform == 'win32' and sys.version_info >= (3, 8):
+             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+             
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

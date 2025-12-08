@@ -45,12 +45,13 @@ class ParietalConfigLoader:
         """Load parietal core configuration from secure database"""
         return {
             "neuron_count": 0,  # Populated dynamically
-            "telemetry_interval": 2.0,  # Seconds between hardware scans
-            "health_check_interval": 60.0,  # Seconds between deep health checks
-            "code_integrity_interval": 300.0,  # Seconds between code integrity verifications
+            "telemetry_interval": 10.0,  # UPDATED: Increased to 10s to reduce log noise
+            "health_check_interval": 60.0,
+            "code_integrity_interval": 300.0,
             "resource_warning_thresholds": {
-                "cpu_percent": 80.0,
-                "memory_percent": 85.0,
+                "cpu_percent": 90.0,           # Higher threshold for CPU
+                "system_memory_percent": 95.0, # CRITICAL system threshold
+                "process_memory_mb": 2048.0,   # Process leak threshold (2GB)
                 "disk_percent": 90.0,
                 "battery_percent": 20.0
             },
@@ -59,9 +60,10 @@ class ParietalConfigLoader:
                 "Backend/temporal_core.py",
                 "Backend/memory_core.py",
                 "Backend/parietal_core.py",
-                "Backend/occipital_core.py"
+                "Backend/occipital_core.py",
+                "Backend/llm_gateway.py"
             ],
-            "awareness_sensitivity": 0.8,  # 0.0 to 1.0
+            "awareness_sensitivity": 0.8,
             "self_correction_enabled": True
         }
 
@@ -346,20 +348,27 @@ class ParietalFunctionRegistry:
             return {"error": str(e)}
 
     async def monitor_memory_usage(self, **kwargs) -> Dict[str, Any]:
-        """Monitor RAM usage"""
+        """Monitor System RAM and Process-Specific Memory"""
         if not psutil:
             return {"error": "psutil_unavailable", "percent": 0.0}
         
         try:
+            # 1. System Memory
             mem = psutil.virtual_memory()
             swap = psutil.swap_memory()
+            
+            # 2. Process Memory (AARIA specific)
+            process = psutil.Process(os.getpid())
+            mem_info = process.memory_info()
+            process_mb = round(mem_info.rss / (1024 * 1024), 2)
             
             return {
                 "memory_total_gb": round(mem.total / (1024**3), 2),
                 "memory_available_gb": round(mem.available / (1024**3), 2),
-                "memory_percent": mem.percent,
+                "system_memory_percent": mem.percent, # Renamed for clarity
+                "process_memory_mb": process_mb,      # New metric
                 "swap_percent": swap.percent,
-                "pressure_status": "high" if mem.percent > 85 else "normal"
+                "pressure_status": "high" if mem.percent > 95 else "normal"
             }
         except Exception as e:
             return {"error": str(e)}
@@ -619,9 +628,11 @@ class ParietalNeuralNetwork:
 
     async def _monitoring_loop(self):
         """Continuous hardware and environment monitoring loop"""
+        logger.info("Parietal Monitoring Loop Started (Interval: 10s)")
         while True:
             try:
-                interval = self.config.get("telemetry_interval", 2.0)
+                # UPDATED: Use configured interval (default 10s)
+                interval = self.config.get("telemetry_interval", 10.0)
                 await asyncio.sleep(interval)
                 
                 # Activate hardware awareness neurons
@@ -629,7 +640,8 @@ class ParietalNeuralNetwork:
                 
                 scan_results = {}
                 for neuron in hardware_neurons:
-                    result = await neuron.fire(0.8)
+                    # Fire with reduced strength to save energy
+                    result = await neuron.fire(0.6) 
                     if isinstance(result, dict) and "error" not in result:
                         scan_results.update(result)
                 
@@ -646,7 +658,37 @@ class ParietalNeuralNetwork:
                 break
             except Exception as e:
                 logger.error(f"Parietal monitoring loop error: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(interval * 2) # Backoff on error
+
+    async def _check_anomalies(self, current_scan: Dict[str, Any]):
+        """Analyze current scan for threshold breaches"""
+        thresholds = self.config.get("resource_warning_thresholds", {})
+        
+        # Check CPU
+        if "cpu_usage_percent" in current_scan:
+            if current_scan["cpu_usage_percent"] > thresholds.get("cpu_percent", 90):
+                # Don't increment anomaly count for transient CPU spikes, just log debug
+                if current_scan["cpu_usage_percent"] > 95: 
+                    logger.warning(f"CPU Critical: {current_scan['cpu_usage_percent']}%")
+                    self.performance_metrics["anomalies_detected"] += 1
+        
+        # UPDATED: Check Memory (Smart Filtering)
+        # 1. Check if AARIA Process is leaking (>2GB)
+        proc_mem = current_scan.get("process_memory_mb", 0)
+        proc_limit = thresholds.get("process_memory_mb", 2048.0)
+        
+        if proc_mem > proc_limit:
+            self.performance_metrics["anomalies_detected"] += 1
+            logger.warning(f"High Process Memory Detected: {proc_mem} MB. Potential Leak.")
+            # Optional: Trigger GC here if we had access to gc module directly
+            
+        # 2. Check System Memory (Only warn if CRITICAL)
+        sys_mem = current_scan.get("system_memory_percent", 0)
+        sys_limit = thresholds.get("system_memory_percent", 95.0)
+        
+        if sys_mem > sys_limit:
+             self.performance_metrics["anomalies_detected"] += 1
+             logger.warning(f"CRITICAL SYSTEM RAM: {sys_mem}% Used. OS instability imminent.")
 
     async def _integrity_loop(self):
         """Periodic code and health integrity loop"""
