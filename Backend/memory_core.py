@@ -1464,7 +1464,7 @@ class MemoryStorageEngine:
                     if memory_id in self.memories and memory_id not in search_results:
                         search_results.append(memory_id)
             
-            # 3. Text search (Enhanced Keyword Matching)
+            # 3. Text search (Enhanced Keyword Matching with Content Search)
             if "text" in query and query["text"]:
                 text_input = query["text"].lower()
                 # Split input into significant keywords (length > 3)
@@ -1472,7 +1472,9 @@ class MemoryStorageEngine:
                 text_results = []
                 
                 for memory_id, memory_entry in self.memories.items():
-                    # Check tags
+                    match_found = False
+                    
+                    # Check tags first (faster)
                     memory_tags = {t.lower() for t in memory_entry.metadata.tags}
                     
                     # Match if ANY keyword appears in ANY tag (Fuzzy association)
@@ -1483,6 +1485,45 @@ class MemoryStorageEngine:
                     # Also check if tags appear in the text input (Reverse association)
                     if any(tag in text_input for tag in memory_tags):
                         text_results.append(memory_id)
+                        continue
+                    
+                    # NEW: Search within decrypted memory content for better recall
+                    # This is essential for finding specific facts like dates, names, etc.
+                    try:
+                        # Check cache first
+                        if memory_id in self.memory_cache:
+                            cached_data, _ = self.memory_cache[memory_id]
+                            content = str(cached_data).lower()
+                        else:
+                            # Decrypt memory to search content
+                            pkg = {
+                                "encrypted_data": base64.urlsafe_b64encode(memory_entry.encrypted_data).decode(),
+                                "metadata": memory_entry.encryption_metadata
+                            }
+                            tier_map = {
+                                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
+                                DataTier.ROOT_DATABASE: "root",
+                                DataTier.ACCESS_DATA: "access",
+                                DataTier.PUBLIC_DATA: "public"
+                            }
+                            enc_tier = tier_map.get(memory_entry.metadata.tier, "owner_confidential")
+                            dec = await self.encryption_manager.decrypt_data(pkg, enc_tier)
+                            
+                            if dec.get("success"):
+                                content = dec["decrypted_data"].decode().lower()
+                                # Cache for future searches
+                                self.memory_cache[memory_id] = (dec["decrypted_data"].decode(), datetime.now())
+                            else:
+                                continue
+                        
+                        # Search for keywords in content
+                        if any(kw in content for kw in keywords):
+                            text_results.append(memory_id)
+                            
+                    except Exception as e:
+                        # Log error but continue searching other memories
+                        logger.debug(f"Could not search content of memory {memory_id}: {e}")
+                        continue
 
                 search_methods.append(("text_keyword", len(text_results)))
                 search_results.extend(text_results[:max_results])
