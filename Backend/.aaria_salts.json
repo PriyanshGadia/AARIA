@@ -1,0 +1,8 @@
+{
+  "master_key_salt": "fe2hx1QgUxVQvqgib2T8lghKvkfrBqFqLY9X6VQGdLM=",
+  "root_key_salt": "y5X6_Cy7qRIn7B8p7jHmWZDP5M-h8JAkFD6OGe5p6nE=",
+  "owner_confidential_key_salt": "feQZ3xvSpewm62EViinAq5etl7H5qyx39NWCRS3sWbo=",
+  "access_key_salt": "69j5SNe8wBGBGCbnzZA7BBzQFFi3J9bFgkLArj2IhlA=",
+  "public_key_salt": "7F81_QJg_wTDxxttr7yXd-8iGCao8HVsNdSL-hC-ljY=",
+  "temporal_key_salt": "e0p_tA9Y8adkN2tIrRb7S2_BFCsTB8wOpPzNt9IvD9Q="
+}
