@@ -1124,6 +1124,7 @@ class MemoryStorageEngine:
             )
             
             if not encryption_success:
+                logger.error("Failed to initialize encryption manager. Memory storage cannot proceed.")
                 return False
             
             # Load existing memories from disk
@@ -1159,7 +1160,10 @@ class MemoryStorageEngine:
                 )
                 
                 if not decryption_result.get("success"):
-                    logger.error(f"Failed to decrypt storage: {decryption_result.get('error')}")
+                    error_msg = decryption_result.get('error', 'Unknown error')
+                    logger.error(f"Failed to decrypt storage: {error_msg}")
+                    logger.warning("This may be due to changed encryption keys or corrupted storage. Starting with fresh memory.")
+                    logger.info("Previous memories cannot be recovered without the original encryption keys.")
                     return
 
                 # Deserialize the state
