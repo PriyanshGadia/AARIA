@@ -103,15 +103,25 @@ class HiveMindOrchestrator:
             # 1. ALWAYS retrieve recent conversation history (last 10 turns)
             # This ensures continuity in ongoing conversations
             recent_result = await self.stem.memory.execute_command("search_memories", {
-                "query": {"text": "", "tags": ["conversation", "recent"]},
+                "query": {"tags": ["conversation", "recent"]},
                 "access_level": "owner_root",
-                "max_results": 10,
-                "sort_by": "timestamp",
-                "order": "desc"
+                "max_results": 20  # Get more to ensure we have enough after sorting
             })
             
             if recent_result.get("success"):
                 recent_memories = recent_result.get("results", [])
+                # Sort by timestamp (most recent first) if metadata includes it
+                try:
+                    recent_memories.sort(
+                        key=lambda x: x.get("metadata", {}).timestamp if hasattr(x.get("metadata", {}), 'timestamp') else 0,
+                        reverse=True
+                    )
+                except Exception:
+                    pass  # If sorting fails, continue with unsorted results
+                
+                # Take only the most recent 10 after sorting
+                recent_memories = recent_memories[:10]
+                
                 if recent_memories:
                     context_lines.append("RECENT CONVERSATION:")
                     for item in recent_memories:
@@ -122,9 +132,10 @@ class HiveMindOrchestrator:
                                 context_lines.append(f"  {mem_str}")
                                 seen_content.add(mem_str)
             
-            # 2. Semantic search for relevant memories (facts, user profile, past context)
+            # 2. Semantic search for relevant memories (facts, user profile, older conversations)
+            # We search for facts/profiles AND older conversations that might be relevant
             search_result = await self.stem.memory.execute_command("search_memories", {
-                "query": {"text": input_text, "tags": ["fact", "user_profile"]},
+                "query": {"text": input_text, "tags": ["fact", "user_profile", "conversation"]},
                 "access_level": "owner_root",
                 "max_results": self.stem.config.get("memory_search_limit", 5)
             })

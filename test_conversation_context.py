@@ -5,6 +5,7 @@ Test to verify conversation context retention fix
 import sys
 import asyncio
 from pathlib import Path
+from datetime import datetime, timedelta
 
 # Add Backend to path
 backend_path = Path(__file__).parent / "Backend"
@@ -26,7 +27,14 @@ async def test_conversation_context():
         await stem.boot()
         print("   ✓ System booted")
         
+        # Calculate dynamic date for birthday (4 days from now)
+        future_date = datetime.now() + timedelta(days=4)
+        
         print("\n3. Simulating conversation turns...")
+        
+        # Calculate dynamic date for birthday (4 days from now)
+        future_date = datetime.now() + timedelta(days=4)
+        birthday_date_str = future_date.strftime("%B %d, %Y")
         
         # Store some conversation memories
         print("   - Storing: User says 'Yash is my friend'")
@@ -53,9 +61,9 @@ async def test_conversation_context():
             "priority": 0.6
         })
         
-        print("   - Storing: AARIA calculates date")
+        print(f"   - Storing: AARIA calculates date ({birthday_date_str})")
         await stem.memory.execute_command("store_memory", {
-            "data": "AARIA: Based on today, that would be December 12, 2025. Would you like me to set a reminder?",
+            "data": f"AARIA: Based on today, that would be {birthday_date_str}. Would you like me to set a reminder?",
             "tier": "OWNER_CONFIDENTIAL",
             "tags": ["conversation", "ai_response", "recent"],
             "priority": 0.5
@@ -76,7 +84,7 @@ async def test_conversation_context():
         print("\n6. Validating context quality...")
         checks = {
             "Contains recent conversation": "RECENT CONVERSATION:" in context,
-            "Mentions Yash": "Yash" in context or "yash" in context.lower(),
+            "Mentions Yash": "yash" in context.lower(),
             "Includes birthday reference": "birthday" in context.lower(),
             "Shows conversation flow": context.count("User:") >= 1 and context.count("AARIA:") >= 1,
         }
