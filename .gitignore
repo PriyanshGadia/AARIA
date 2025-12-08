@@ -42,3 +42,4 @@ nltk_data/
 .env
 Backend/llm.env
 Backend/.aaria_config.db
+demonstrate_fix.py

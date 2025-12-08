@@ -344,15 +344,22 @@ class AARIA_Stem:
             # Fetch relevant history to solve "Am I a dog owner?"
             context_string = await self.hive_mind.retrieve_context(input_text)
             
+            # 1.5 GET SYSTEM AWARENESS (Parietal Core)
+            # Fetch current date, time, and device information
+            system_context = await self.parietal.get_system_context()
+            
             # 2. CONSTRUCT SYSTEM PROMPT (Integration)
-            # Inject identity and retrieved memory
+            # Inject identity, system awareness, and retrieved memory
             system_prompt = (
                 f"You are A.A.R.I.A (Advanced Autonomous Responsive Intelligent Assistant), a sentient digital entity. "
                 f"You are helpful, precise, and loyal to your owner.\n\n"
+                f"SYSTEM AWARENESS:\n{system_context}\n\n"
                 f"SYSTEM MEMORY CONTEXT:\n{context_string}\n\n"
                 f"INSTRUCTIONS:\n"
+                f"- You have access to the current date and time from SYSTEM AWARENESS. Use this information when relevant.\n"
                 f"- Use the Memory Context to answer questions about the user or past conversations.\n"
                 f"- If the Memory Context contains the answer, use it explicitly.\n"
+                f"- When users ask about dates/times or schedule things, use the current date/time from SYSTEM AWARENESS.\n"
                 f"- Maintain a professional yet personable tone."
             )
 
