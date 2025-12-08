@@ -113,7 +113,7 @@ class HiveMindOrchestrator:
                 # Sort by timestamp (most recent first) if metadata includes it
                 try:
                     recent_memories.sort(
-                        key=lambda x: x.get("metadata", {}).timestamp if hasattr(x.get("metadata", {}), 'timestamp') else 0,
+                        key=lambda x: x.get("metadata", {}).get("timestamp", 0) if isinstance(x.get("metadata", {}), dict) else 0,
                         reverse=True
                     )
                 except Exception:

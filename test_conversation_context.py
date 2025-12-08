@@ -27,9 +27,6 @@ async def test_conversation_context():
         await stem.boot()
         print("   ✓ System booted")
         
-        # Calculate dynamic date for birthday (4 days from now)
-        future_date = datetime.now() + timedelta(days=4)
-        
         print("\n3. Simulating conversation turns...")
         
         # Calculate dynamic date for birthday (4 days from now)
