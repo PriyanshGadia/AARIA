@@ -855,6 +855,32 @@ class ParietalCore:
             "is_running": self.is_running,
             "uptime": uptime
         }
+    
+    async def get_system_context(self) -> str:
+        """Get formatted system context for LLM prompts"""
+        try:
+            # Get current date and time (capture once for consistency)
+            now = datetime.now()
+            date_str = now.strftime("%A, %B %d, %Y")  # e.g., "Monday, December 08, 2025"
+            time_str = now.strftime("%I:%M %p")  # e.g., "08:23 PM"
+            
+            # Get basic system info
+            system_info = platform.system()
+            hostname = platform.node()
+            
+            # Format context string
+            context = (
+                f"CURRENT DATE: {date_str}\n"
+                f"CURRENT TIME: {time_str}\n"
+                f"DEVICE: {hostname} ({system_info})"
+            )
+            
+            return context
+        except Exception as e:
+            logger.error(f"Failed to get system context: {e}")
+            # Return minimal context on error (capture datetime once)
+            now = datetime.now()
+            return f"CURRENT DATE: {now.strftime('%Y-%m-%d')}\nCURRENT TIME: {now.strftime('%H:%M')}"
         
     async def execute_command(self, command: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Execute high-level parietal core commands"""
