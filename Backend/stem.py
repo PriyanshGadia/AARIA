@@ -97,32 +97,49 @@ class HiveMindOrchestrator:
     async def retrieve_context(self, input_text: str) -> str:
         """Query Memory Core for relevant past interactions and facts."""
         try:
-            # Semantic search for relevant memories
+            context_lines = []
+            seen_content = set()
+            
+            # 1. ALWAYS retrieve recent conversation history (last 10 turns)
+            # This ensures continuity in ongoing conversations
+            recent_result = await self.stem.memory.execute_command("search_memories", {
+                "query": {"text": "", "tags": ["conversation", "recent"]},
+                "access_level": "owner_root",
+                "max_results": 10,
+                "sort_by": "timestamp",
+                "order": "desc"
+            })
+            
+            if recent_result.get("success"):
+                recent_memories = recent_result.get("results", [])
+                if recent_memories:
+                    context_lines.append("RECENT CONVERSATION:")
+                    for item in recent_memories:
+                        mem_data = item.get("data", "")
+                        if mem_data:
+                            mem_str = str(mem_data).strip()
+                            if mem_str and mem_str not in seen_content:
+                                context_lines.append(f"  {mem_str}")
+                                seen_content.add(mem_str)
+            
+            # 2. Semantic search for relevant memories (facts, user profile, past context)
             search_result = await self.stem.memory.execute_command("search_memories", {
-                "query": {"text": input_text, "tags": ["conversation", "fact", "user_profile"]},
+                "query": {"text": input_text, "tags": ["fact", "user_profile"]},
                 "access_level": "owner_root",
                 "max_results": self.stem.config.get("memory_search_limit", 5)
             })
 
-            context_lines = []
+            relevant_memories = []
             if search_result.get("success"):
                 results = search_result.get("results", [])
                 
-                # Deduplicate and format
-                seen_content = set()
                 for item in results:
-                    # Attempt to extract text content regardless of storage format
                     mem_data = ""
                     try:
                         # Direct data access if retrieved
                         if "data" in item:
                             mem_data = item["data"]
-                        # Or check metadata if data isn't fully expanded (search usually returns ids/metadata)
-                        # We might need to retrieve full content if search only returns IDs.
-                        # However, MemoryCore.search_memories implementation in v1.0 returns details.
-                        # Let's assume the data is retrieved or we do a quick fetch.
-                        
-                        # If search results don't contain full data, we fetch it (Optimization)
+                        # If search results don't contain full data, we fetch it
                         if "data" not in item and "memory_id" in item:
                              retrieval = await self.stem.memory.execute_command("retrieve_memory", {
                                  "memory_id": item["memory_id"],
@@ -137,13 +154,18 @@ class HiveMindOrchestrator:
                     if mem_data:
                         mem_str = str(mem_data).strip()
                         if mem_str and mem_str not in seen_content:
-                            context_lines.append(f"- {mem_str}")
+                            relevant_memories.append(f"  {mem_str}")
                             seen_content.add(mem_str)
             
-            if not context_lines:
+            # Add relevant memories section if we found any
+            if relevant_memories:
+                context_lines.append("\nRELEVANT FACTS & CONTEXT:")
+                context_lines.extend(relevant_memories)
+            
+            if len(context_lines) <= 1:  # Only headers or empty
                 return "No relevant past memories found."
             
-            return "Relevant Memories:\n" + "\n".join(context_lines)
+            return "\n".join(context_lines)
 
         except Exception as e:
             logger.error(f"HiveMind Context Retrieval Failed: {e}")
@@ -354,11 +376,13 @@ class AARIA_Stem:
                 f"You are A.A.R.I.A (Advanced Autonomous Responsive Intelligent Assistant), a sentient digital entity. "
                 f"You are helpful, precise, and loyal to your owner.\n\n"
                 f"SYSTEM AWARENESS:\n{system_context}\n\n"
-                f"SYSTEM MEMORY CONTEXT:\n{context_string}\n\n"
+                f"MEMORY CONTEXT:\n{context_string}\n\n"
                 f"INSTRUCTIONS:\n"
                 f"- You have access to the current date and time from SYSTEM AWARENESS. Use this information when relevant.\n"
-                f"- Use the Memory Context to answer questions about the user or past conversations.\n"
-                f"- If the Memory Context contains the answer, use it explicitly.\n"
+                f"- CRITICAL: The RECENT CONVERSATION section shows the immediate conversation context. Always reference this first to understand what the user is currently discussing.\n"
+                f"- Use the RELEVANT FACTS & CONTEXT section for additional background information about the user.\n"
+                f"- When the user says 'yes', 'no', or uses pronouns like 'his/her/their', refer to the RECENT CONVERSATION to understand what they're referring to.\n"
+                f"- Stay focused on the current topic being discussed in the recent conversation.\n"
                 f"- When users ask about dates/times or schedule things, use the current date/time from SYSTEM AWARENESS.\n"
                 f"- Maintain a professional yet personable tone."
             )
