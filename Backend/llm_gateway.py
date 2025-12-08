@@ -339,6 +339,14 @@ class LLMGateway:
                                 provider="local", 
                                 error="Model missing"
                             )
+                        elif response.status == 503:
+                            # 503 means service unavailable - Ollama might be overloaded or starting up
+                            logger.warning("Ollama returned 503 Service Unavailable. The service may be overloaded or starting up.")
+                            return LLMResponse(
+                                text="[SYSTEM] Ollama is temporarily unavailable (503). Please try again in a moment.", 
+                                provider="local", 
+                                error="Service Unavailable"
+                            )
                         else:
                             logger.error(f"Ollama Error {response.status}")
                             return LLMResponse(text=f"[SYSTEM] Ollama HTTP {response.status}", provider="local", error=f"HTTP {response.status}")
@@ -430,9 +438,28 @@ class LLMGateway:
             api_key = os.getenv("ANTHROPIC_API_KEY") or self.providers_config.get("anthropic", {}).get("api_key")
             if not api_key: return await self._fallback_llm(request)
             
-            payload = {"model": "claude-3-sonnet-20240229", "messages": [{"role": "user", "content": request.prompt}], "max_tokens": 1000}
-            if request.system_prompt: payload["system"] = request.system_prompt
+            # Prepare request for Gemini
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": request.prompt}
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": request.temperature,
+                    "maxOutputTokens": request.max_tokens,
+                }
+            }
             
+            # Add system instruction if provided
+            if request.system_prompt:
+                payload["systemInstruction"] = {
+                    "parts": [{"text": request.system_prompt}]
+                }
+            
+            # Make request to Gemini (using v1 API, not v1beta)
             async with aiohttp.ClientSession() as session:
                 async with session.post("https://api.anthropic.com/v1/messages", json=payload, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}) as response:
                     if response.status == 200:
