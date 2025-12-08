@@ -124,18 +124,16 @@ class HiveMindOrchestrator:
                                     return created_at.timestamp()
                                 # If it's a string, try to parse it
                                 elif isinstance(created_at, str):
-                                    from datetime import datetime
                                     try:
                                         dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                                         return dt.timestamp()
-                                    except:
+                                    except (ValueError, AttributeError):
                                         pass
                         return 0
                     
                     recent_memories.sort(key=get_timestamp, reverse=True)
                 except Exception as e:
                     logger.debug(f"Failed to sort memories by timestamp: {e}")
-                    pass  # If sorting fails, continue with unsorted results
                 
                 # Take only the most recent 10 after sorting
                 recent_memories = recent_memories[:10]
@@ -149,7 +147,7 @@ class HiveMindOrchestrator:
                             if isinstance(mem_data, bytes):
                                 try:
                                     mem_str = mem_data.decode('utf-8').strip()
-                                except:
+                                except UnicodeDecodeError:
                                     mem_str = str(mem_data).strip()
                             else:
                                 mem_str = str(mem_data).strip()
@@ -193,7 +191,7 @@ class HiveMindOrchestrator:
                         if isinstance(mem_data, bytes):
                             try:
                                 mem_str = mem_data.decode('utf-8').strip()
-                            except:
+                            except UnicodeDecodeError:
                                 mem_str = str(mem_data).strip()
                         else:
                             mem_str = str(mem_data).strip()
