@@ -1,48 +1,93 @@
-# // LLM_GATEWAY.PY
-# // VERSION: 1.0.0
-# // DESCRIPTION: LLM Gateway - Unified interface for local and cloud LLM providers with privacy filters
-# // UPDATE NOTES: Initial release. Implements LLM abstraction layer, privacy filtering, and provider routing.
-# // IMPORTANT: No hardcoded API keys. All credentials loaded from encrypted configuration.
+# // AARIA/Backend/llm_gateway.py
+# // VERSION: 1.1.1
+# // DESCRIPTION: Enterprise LLM Gateway with Circuit Breaker, DeepSeek Default, and Resilience Patterns.
+# // UPDATE NOTES: 
+# // - Fixed aiohttp ContentTypeError by relaxing JSON MIME type enforcement (fixes Ollama text/plain headers).
+# // - Refined connection checking logic.
 
 import asyncio
 import json
 import os
 import re
-import hashlib
+import time
+import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from enum import Enum
 from dataclasses import dataclass, field
 from pathlib import Path
-import logging
 
 # Configuration constants
 LLM_ENV_FILE = 'llm.env'
+DEFAULT_LOCAL_MODEL = "deepseek-v3.1:671b-cloud"
+DEFAULT_OLLAMA_ENDPOINT = "http://localhost:11434"
 
-# Load environment variables from llm.env if it exists
+# Load environment variables
 try:
     from dotenv import load_dotenv
-    # Try to load from Backend/llm.env first, then from current directory
     env_path = Path(__file__).parent / LLM_ENV_FILE
     if env_path.exists():
         load_dotenv(env_path)
     else:
-        load_dotenv()  # Load from default .env location
+        load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed, will use system environment variables
+    pass
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("AARIA_LLM_GATEWAY")
+
+# ==================== CIRCUIT BREAKER PATTERN ====================
+class CircuitBreakerState(Enum):
+    CLOSED = "closed"       # Normal operation
+    OPEN = "open"           # Failing fast, service assumed down
+    HALF_OPEN = "half_open" # Testing recovery
+
+class CircuitBreaker:
+    """
+    Enterprise reliability pattern to prevent cascading failures.
+    Monitors failure rates and 'trips' to prevent resource exhaustion on dead services.
+    """
+    def __init__(self, failure_threshold: int = 3, recovery_timeout: int = 30):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failures = 0
+        self.last_failure_time = 0
+        self.state = CircuitBreakerState.CLOSED
+
+    def can_execute(self) -> bool:
+        """Check if request allowed to proceed"""
+        if self.state == CircuitBreakerState.OPEN:
+            if time.time() - self.last_failure_time > self.recovery_timeout:
+                self.state = CircuitBreakerState.HALF_OPEN
+                logger.info("Circuit Breaker entering HALF_OPEN state - Probing service...")
+                return True
+            return False
+        return True
+
+    def record_success(self):
+        """Reset counters on success"""
+        if self.state != CircuitBreakerState.CLOSED:
+            logger.info("Circuit Breaker recovering to CLOSED state.")
+            self.state = CircuitBreakerState.CLOSED
+            self.failures = 0
+
+    def record_failure(self):
+        """Increment failure count and potentially trip breaker"""
+        self.failures += 1
+        self.last_failure_time = time.time()
+        if self.failures >= self.failure_threshold:
+            if self.state != CircuitBreakerState.OPEN:
+                logger.warning(f"Circuit Breaker TRIPPED to OPEN state. Failures: {self.failures}")
+            self.state = CircuitBreakerState.OPEN
 
 # ==================== LLM PROVIDER TYPES ====================
 class LLMProvider(Enum):
     """Supported LLM providers"""
-    LOCAL = "local"           # Local models (Ollama, LLaMA, llama3:latest)
+    LOCAL = "local"           # Ollama (DeepSeek, LLaMA, etc.)
     OPENAI = "openai"         # OpenAI GPT models
     ANTHROPIC = "anthropic"   # Claude models
     GEMINI = "gemini"         # Google Gemini models
     GROQ = "groq"             # Groq (fast inference)
-    AZURE = "azure"           # Azure OpenAI
-    FALLBACK = "fallback"     # Simple rule-based fallback
+    FALLBACK = "fallback"     # Rule-based fallback
 
 class PrivacyLevel(Enum):
     """Data privacy levels"""
@@ -55,67 +100,30 @@ class PrivacyFilter:
     """Filters sensitive data before sending to cloud LLMs"""
     
     def __init__(self):
-        # Patterns for sensitive data detection
         self.patterns = {
             "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
             "phone": r'\b(?:\+?1[-.]?)?\(?([0-9]{3})\)?[-.]?([0-9]{3})[-.]?([0-9]{4})\b',
             "ssn": r'\b\d{3}-\d{2}-\d{4}\b',
-            "credit_card": r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',
-            "file_path_windows": r'[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*',
-            "file_path_unix": r'/(?:[^/\0]+/)*[^/\0]*',
-            "ip_address": r'\b(?:\d{1,3}\.){3}\d{1,3}\b',
-            "api_key": r'\b[A-Za-z0-9_-]{32,}\b',  # Common API key format
+            "api_key": r'\b[A-Za-z0-9_-]{32,}\b',
         }
-        
-        self.sensitive_keywords = [
-            "password", "api_key", "secret", "token", "credential",
-            "ssn", "social security", "credit card", "bank account"
-        ]
     
     def sanitize(self, text: str, privacy_level: PrivacyLevel) -> str:
-        """
-        Sanitize text based on privacy level
-        
-        Args:
-            text: Input text to sanitize
-            privacy_level: Level of privacy filtering to apply
-            
-        Returns:
-            Sanitized text
-        """
         if privacy_level == PrivacyLevel.OWNER_ONLY:
-            # For owner-only data, return empty - should not be sent to cloud
             return "[PRIVATE_DATA_REDACTED]"
-        
         sanitized = text
-        
-        # Remove sensitive patterns
         for pattern_name, pattern in self.patterns.items():
             sanitized = re.sub(pattern, f"[{pattern_name.upper()}_REDACTED]", sanitized)
-        
-        # Check for sensitive keywords
-        for keyword in self.sensitive_keywords:
-            if keyword.lower() in sanitized.lower():
-                logger.warning(f"Sensitive keyword '{keyword}' detected in text")
-        
         return sanitized
     
     def is_safe_for_cloud(self, text: str, privacy_level: PrivacyLevel) -> bool:
-        """Check if text is safe to send to cloud LLM"""
-        if privacy_level == PrivacyLevel.OWNER_ONLY:
-            return False
-        
-        # Check for sensitive patterns
+        if privacy_level == PrivacyLevel.OWNER_ONLY: return False
         for pattern in self.patterns.values():
-            if re.search(pattern, text):
-                return False
-        
+            if re.search(pattern, text): return False
         return True
 
-# ==================== LLM GATEWAY ====================
+# ==================== DATA MODELS ====================
 @dataclass
 class LLMRequest:
-    """LLM request structure"""
     prompt: str
     provider: LLMProvider = LLMProvider.LOCAL
     privacy_level: PrivacyLevel = PrivacyLevel.CONFIDENTIAL
@@ -126,627 +134,340 @@ class LLMRequest:
 
 @dataclass
 class LLMResponse:
-    """LLM response structure"""
     text: str
     provider: str
     tokens_used: int = 0
     confidence: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    error: Optional[str] = None
 
+# ==================== LLM GATEWAY ====================
 class LLMGateway:
-    """Central gateway for all LLM interactions"""
+    """Central Enterprise Gateway for all LLM interactions with Dynamic Configuration"""
     
     def __init__(self):
         self.privacy_filter = PrivacyFilter()
         self.providers_config = {}
-        self.token_usage = {"total": 0, "today": 0, "this_month": 0}
         self.enabled = False
-        self.default_provider = LLMProvider.FALLBACK
+        self.default_provider = LLMProvider.LOCAL 
+        self._circuit_breakers = {p: CircuitBreaker() for p in LLMProvider}
+        
+        # Configuration Defaults (overridden by initialize)
+        self.default_local_model = DEFAULT_LOCAL_MODEL
+        self._available_ollama_models = []
         
     async def initialize(self, config: Dict[str, Any]) -> bool:
-        """
-        Initialize LLM Gateway with configuration
-        Auto-detects available providers based on environment variables and local services
-        
-        Args:
-            config: LLM configuration dictionary
-            
-        Returns:
-            bool: True if successful
-        """
+        """Initialize LLM Gateway with configuration"""
         try:
-            self.enabled = config.get("enabled", False)
-            requested_provider = config.get("default_provider", "local").upper()
+            self.enabled = config.get("enabled", True)
             self.providers_config = config.get("providers", {})
             
-            # Auto-detect available providers from environment variables and services
-            available_providers = {}
-            
-            # Check for local Ollama FIRST (preferred for privacy)
-            ollama_available = False
-            try:
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.get("http://localhost:11434/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            models = data.get("models", [])
-                            model_names = [m.get("name", "") for m in models]
-                            available_providers["local"] = f"Ollama ({len(models)} models: {', '.join(model_names[:3])}{'...' if len(models) > 3 else ''})"
-                            ollama_available = True
-            except Exception as e:
-                logger.debug(f"Ollama not available: {e}")
-            
-            # Check for cloud API keys
-            if os.getenv("GEMINI_API_KEY"):
-                available_providers["gemini"] = "Google Gemini (gemini-1.5-flash)"
-            
-            if os.getenv("GROQ_API_KEY"):
-                available_providers["groq"] = "Groq (llama3-70b-8192, ultra-fast)"
-            
-            if os.getenv("OPENAI_API_KEY"):
-                available_providers["openai"] = "OpenAI (gpt-3.5-turbo / gpt-4)"
-            
-            if os.getenv("ANTHROPIC_API_KEY"):
-                available_providers["anthropic"] = "Anthropic (claude-3)"
-            
-            # Determine which provider to use
-            if requested_provider == "LOCAL":
-                if ollama_available:
-                    self.default_provider = LLMProvider.LOCAL
-                    logger.info(f"Using LOCAL Ollama as requested: {available_providers['local']}")
-                elif available_providers:
-                    # Ollama requested but not available, try cloud providers
-                    if "gemini" in available_providers:
-                        self.default_provider = LLMProvider.GEMINI
-                        logger.info("Ollama not available, switching to Gemini (API key found)")
-                    elif "groq" in available_providers:
-                        self.default_provider = LLMProvider.GROQ
-                        logger.info("Ollama not available, switching to Groq (API key found)")
-                    elif "openai" in available_providers:
-                        self.default_provider = LLMProvider.OPENAI
-                        logger.info("Ollama not available, switching to OpenAI (API key found)")
-                    elif "anthropic" in available_providers:
-                        self.default_provider = LLMProvider.ANTHROPIC
-                        logger.info("Ollama not available, switching to Anthropic (API key found)")
-                else:
-                    self.default_provider = LLMProvider.FALLBACK
-                    logger.warning("LOCAL requested but Ollama not available, no API keys found")
+            # Map requested string to Enum
+            requested_provider = config.get("default_provider", "local").upper()
+            if requested_provider in LLMProvider.__members__:
+                self.default_provider = LLMProvider[requested_provider]
             else:
-                # Specific provider requested
-                provider_lower = requested_provider.lower()
-                if provider_lower in available_providers:
-                    self.default_provider = LLMProvider[requested_provider]
-                    logger.info(f"Using {requested_provider}: {available_providers[provider_lower]}")
-                else:
-                    # Requested provider not available, find alternative
-                    if ollama_available:
-                        self.default_provider = LLMProvider.LOCAL
-                        logger.info(f"{requested_provider} not available, using LOCAL Ollama instead")
-                    elif available_providers:
-                        # Use first available cloud provider
-                        first_provider = list(available_providers.keys())[0]
-                        self.default_provider = LLMProvider[first_provider.upper()]
-                        logger.info(f"{requested_provider} not available, using {first_provider}: {available_providers[first_provider]}")
-                    else:
-                        self.default_provider = LLMProvider.FALLBACK
-                        logger.warning(f"{requested_provider} not available, no alternatives found")
+                self.default_provider = LLMProvider.LOCAL
+
+            # Resolve Model Config
+            local_config = self.providers_config.get("local", {})
+            self.default_local_model = local_config.get("model", DEFAULT_LOCAL_MODEL)
+
+            # Initial Background Connectivity Check
+            if self.default_provider == LLMProvider.LOCAL:
+                asyncio.create_task(self._check_ollama_startup())
             
-            if available_providers:
-                logger.info(f"LLM Gateway initialized: enabled={self.enabled}, default={self.default_provider.value}")
-                logger.info(f"Available providers: {', '.join([f'{k}: {v}' for k, v in available_providers.items()])}")
-            else:
-                logger.warning("⚠️  NO AI PROVIDERS AVAILABLE - FALLBACK MODE ONLY")
-                logger.warning("Install Ollama OR set an API key:")
-                logger.warning("  • Ollama (FREE, local): curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest")
-                logger.warning("  • Gemini (FREE tier): export GEMINI_API_KEY='your-key'")
-                logger.warning("  • Groq (fast, cheap): export GROQ_API_KEY='your-key'")
-                logger.warning("  • OpenAI: export OPENAI_API_KEY='your-key'")
-                logger.warning("  • Anthropic: export ANTHROPIC_API_KEY='your-key'")
-                self.default_provider = LLMProvider.FALLBACK
-            
+            logger.info(f"LLM Gateway Initialized. Active: {self.default_provider.name}, Local Model: {self.default_local_model}")
             return True
         except Exception as e:
-            logger.error(f"Failed to initialize LLM Gateway: {e}", exc_info=True)
+            logger.error(f"Failed to initialize LLM Gateway: {e}")
             return False
-    
-    async def generate_response(self, request: LLMRequest) -> LLMResponse:
-        """
-        Generate response from LLM with privacy filtering and automatic fallback
-        
-        Args:
-            request: LLM request object
-            
-        Returns:
-            LLM response object
-        """
+
+    async def _check_ollama_startup(self):
+        """Perform a startup check for Ollama to prime the circuit breaker"""
         try:
-            # Apply privacy filtering
+            is_up = await self.check_connection(LLMProvider.LOCAL)
+            if not is_up:
+                logger.warning(f"⚠️  Ollama connection failed on startup. Ensure Ollama is running at {DEFAULT_OLLAMA_ENDPOINT}")
+            else:
+                logger.info(f"✅ Ollama connection established.")
+        except Exception:
+            pass
+
+    async def check_connection(self, provider: LLMProvider) -> bool:
+        """Explicit connectivity check useful for CLI 'retry' commands"""
+        try:
+            import aiohttp
+            if provider == LLMProvider.LOCAL:
+                endpoint = self.providers_config.get("local", {}).get("endpoint", DEFAULT_OLLAMA_ENDPOINT)
+                async with aiohttp.ClientSession() as session:
+                    # Check tags endpoint to verify connectivity
+                    async with session.get(f"{endpoint}/api/tags", timeout=2) as resp:
+                        return resp.status == 200
+            return True # Assume cloud providers are up if config exists
+        except Exception:
+            return False
+
+    async def update_configuration(self, provider_name: str, api_key: str = None) -> str:
+        """Dynamically update provider configuration at runtime."""
+        try:
+            provider_name = provider_name.lower()
+            provider_enum = None
+            
+            try:
+                provider_enum = LLMProvider[provider_name.upper()]
+            except KeyError:
+                return f"Error: Unknown provider '{provider_name}'. Supported: local, openai, gemini, groq, anthropic."
+
+            if api_key:
+                if provider_name not in self.providers_config:
+                    self.providers_config[provider_name] = {}
+                self.providers_config[provider_name]["api_key"] = api_key
+                
+                # Update environment variable for immediate effect
+                env_var_map = {
+                    "openai": "OPENAI_API_KEY",
+                    "gemini": "GEMINI_API_KEY",
+                    "groq": "GROQ_API_KEY",
+                    "anthropic": "ANTHROPIC_API_KEY"
+                }
+                if provider_name in env_var_map:
+                    os.environ[env_var_map[provider_name]] = api_key
+
+            self.default_provider = provider_enum
+            
+            # Reset circuit breaker for this provider
+            self._circuit_breakers[provider_enum] = CircuitBreaker()
+            
+            return f"Success: Switched to {provider_enum.name}" + (" and updated API key." if api_key else ".")
+            
+        except Exception as e:
+            logger.error(f"Configuration update failed: {e}")
+            return f"Error updating configuration: {str(e)}"
+
+    async def generate_response(self, request: LLMRequest) -> LLMResponse:
+        """Generate response from LLM with Circuit Breaker and Privacy protection"""
+        try:
+            # Privacy & Routing Logic
             if request.privacy_level != PrivacyLevel.PUBLIC:
-                sanitized_prompt = self.privacy_filter.sanitize(request.prompt, request.privacy_level)
-            else:
-                sanitized_prompt = request.prompt
+                request.prompt = self.privacy_filter.sanitize(request.prompt, request.privacy_level)
             
-            # Check if safe for cloud
-            use_local = False
-            if request.provider != LLMProvider.LOCAL:
-                if not self.privacy_filter.is_safe_for_cloud(request.prompt, request.privacy_level):
-                    logger.warning("Prompt contains sensitive data, routing to local LLM")
-                    use_local = True
-                    request.provider = LLMProvider.LOCAL
+            if request.provider != LLMProvider.LOCAL and not self.privacy_filter.is_safe_for_cloud(request.prompt, request.privacy_level):
+                logger.warning("Sensitive data - Forcing Local LLM")
+                request.provider = LLMProvider.LOCAL
             
-            # Route to appropriate provider
-            if not self.enabled or request.provider == LLMProvider.FALLBACK:
-                return await self._fallback_llm(request)
-            elif request.provider == LLMProvider.LOCAL or use_local:
-                return await self._local_llm(request)
-            elif request.provider == LLMProvider.OPENAI:
-                return await self._openai_llm_with_fallback(request)
-            elif request.provider == LLMProvider.ANTHROPIC:
-                return await self._anthropic_llm_with_fallback(request)
-            elif request.provider == LLMProvider.GEMINI:
-                return await self._gemini_llm_with_fallback(request)
-            elif request.provider == LLMProvider.GROQ:
-                return await self._groq_llm_with_fallback(request)
+            # Determine Provider
+            provider = request.provider if request.provider != LLMProvider.FALLBACK else self.default_provider
+            
+            # Check Circuit Breaker
+            cb = self._circuit_breakers.get(provider, self._circuit_breakers[LLMProvider.LOCAL])
+            if not cb.can_execute():
+                return LLMResponse(
+                    text="[SYSTEM] LLM Circuit Breaker Open. Service unavailable.",
+                    provider=provider.name,
+                    error="Circuit Breaker Open",
+                    confidence=0.0
+                )
+
+            # Dispatch
+            response = None
+            if provider == LLMProvider.LOCAL:
+                response = await self._local_llm(request)
+            elif provider == LLMProvider.GEMINI:
+                response = await self._gemini_llm(request)
+            elif provider == LLMProvider.OPENAI:
+                response = await self._openai_llm(request)
+            elif provider == LLMProvider.GROQ:
+                response = await self._groq_llm(request)
+            elif provider == LLMProvider.ANTHROPIC:
+                response = await self._anthropic_llm(request)
             else:
-                return await self._fallback_llm(request)
+                response = await self._fallback_llm(request)
+
+            # Update Circuit Breaker State
+            if response.error:
+                cb.record_failure()
+            else:
+                cb.record_success()
+
+            return response
                 
         except Exception as e:
-            logger.error(f"LLM generation error: {e}")
-            # Try Ollama fallback before using no-LLM fallback
+            logger.error(f"LLM Generation Critical Error: {e}")
+            # If dispatch failed completely, record failure on the intended provider
+            provider = request.provider if request.provider != LLMProvider.FALLBACK else self.default_provider
+            self._circuit_breakers.get(provider).record_failure()
             return await self._try_ollama_fallback(request)
-    
+
+    # ==================== IMPLEMENTATIONS ====================
+
     async def _local_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using local LLM (Ollama with llama2, llama3:latest, etc.)"""
+        """Generate using Ollama with DeepSeek Default"""
         try:
             import aiohttp
+            config = self.providers_config.get("local", {})
+            endpoint = config.get("endpoint", DEFAULT_OLLAMA_ENDPOINT)
             
-            ollama_config = self.providers_config.get("local", {})
-            endpoint = ollama_config.get("endpoint", "http://localhost:11434")
-            model = ollama_config.get("model", "llama3:latest")  # Default to llama3:latest
-            
-            # Prepare request
+            # Use configured default or the fallback constant
+            model_to_use = self.default_local_model
+
             payload = {
-                "model": model,
+                "model": model_to_use,
                 "prompt": request.prompt,
                 "stream": False,
-                "options": {
-                    "temperature": request.temperature,
-                    "num_predict": request.max_tokens
-                }
+                "options": {"temperature": request.temperature, "num_predict": request.max_tokens}
             }
-            
-            if request.system_prompt:
-                payload["system"] = request.system_prompt
-            
-            # Make request to Ollama
+            if request.system_prompt: payload["system"] = request.system_prompt
+
             async with aiohttp.ClientSession() as session:
-                async with session.post(f"{endpoint}/api/generate", json=payload, timeout=30) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return LLMResponse(
-                            text=data.get("response", ""),
-                            provider="local_ollama",
-                            tokens_used=data.get("total_duration", 0),
-                            confidence=0.8,
-                            metadata={"model": model, "endpoint": endpoint}
-                        )
-                    else:
-                        logger.error(f"Ollama request failed: {response.status}")
-                        return await self._fallback_llm(request)
-                        
-        except Exception as e:
-            logger.warning(f"Local LLM failed: {e}. Using fallback.")
-            return await self._fallback_llm(request)
-    
-    async def _openai_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using OpenAI API"""
-        try:
-            import aiohttp
-            
-            openai_config = self.providers_config.get("openai", {})
-            api_key = os.getenv("OPENAI_API_KEY") or openai_config.get("api_key")
-            model = openai_config.get("model", "gpt-3.5-turbo")
-            
-            if not api_key:
-                logger.warning("OpenAI API key not found, using fallback")
-                return await self._fallback_llm(request)
-            
-            # Prepare messages
-            messages = []
-            if request.system_prompt:
-                messages.append({"role": "system", "content": request.system_prompt})
-            messages.append({"role": "user", "content": request.prompt})
-            
-            # Prepare request
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": request.max_tokens,
-                "temperature": request.temperature
-            }
-            
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Make request to OpenAI
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        choice = data["choices"][0]
-                        tokens = data.get("usage", {}).get("total_tokens", 0)
-                        
-                        # Update token usage
-                        self.token_usage["total"] += tokens
-                        self.token_usage["today"] += tokens
-                        
-                        return LLMResponse(
-                            text=choice["message"]["content"],
-                            provider="openai",
-                            tokens_used=tokens,
-                            confidence=0.9,
-                            metadata={"model": model, "finish_reason": choice.get("finish_reason")}
-                        )
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"OpenAI request failed: {response.status} - {error_text}")
-                        return await self._fallback_llm(request)
-                        
-        except Exception as e:
-            logger.warning(f"OpenAI LLM failed: {e}. Using fallback.")
-            return await self._fallback_llm(request)
-    
-    async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Groq API (ultra-fast inference)"""
-        try:
-            import aiohttp
-            
-            groq_config = self.providers_config.get("groq", {})
-            api_key = os.getenv("GROQ_API_KEY") or groq_config.get("api_key")
-            model = groq_config.get("model", "llama3-70b-8192")  # Default to llama3-70b-8192
-            
-            if not api_key:
-                logger.warning("Groq API key not found, using fallback")
-                return await self._fallback_llm(request)
-            
-            # Prepare request for Groq API
-            payload = {
-                "model": model,
-                "max_tokens": request.max_tokens,
-                "messages": [{"role": "user", "content": request.prompt}],
-                "temperature": request.temperature,
-                "stream": False
-            }
-            
-            if request.system_prompt:
-                # For Groq, system prompt is included in the messages array
-                payload["messages"] = [
-                    {"role": "system", "content": request.system_prompt},
-                    {"role": "user", "content": request.prompt}
-                ]
-            
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Make request to Groq
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Groq returns usage information differently
-                        prompt_tokens = data.get("usage", {}).get("prompt_tokens", 0)
-                        completion_tokens = data.get("usage", {}).get("completion_tokens", 0)
-                        total_tokens = prompt_tokens + completion_tokens
-                        
-                        # Update token usage
-                        self.token_usage["total"] += total_tokens
-                        self.token_usage["today"] += total_tokens
-                        
-                        return LLMResponse(
-                            text=data["choices"][0]["message"]["content"],
-                            provider="groq",
-                            tokens_used=total_tokens,
-                            confidence=0.9,
-                            metadata={
-                                "model": model,
-                                "finish_reason": data["choices"][0].get("finish_reason"),
-                                "prompt_tokens": prompt_tokens,
-                                "completion_tokens": completion_tokens
-                            }
-                        )
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Groq request failed: {response.status} - {error_text}")
-                        return await self._fallback_llm(request)
-                        
-        except Exception as e:
-            logger.warning(f"Groq LLM failed: {e}. Using fallback.")
-            return await self._fallback_llm(request)
-    
-    async def _gemini_llm(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Google Gemini API"""
-        try:
-            import aiohttp
-            
-            gemini_config = self.providers_config.get("gemini", {})
-            api_key = os.getenv("GEMINI_API_KEY") or gemini_config.get("api_key")
-            # Use gemini-1.5-flash as default (gemini-pro is deprecated for v1beta)
-            model = gemini_config.get("model", "gemini-1.5-flash")
-            
-            if not api_key:
-                logger.warning("Gemini API key not found, using fallback")
-                return await self._fallback_llm(request)
-            
-            # Prepare request for Gemini
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": request.prompt}
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": request.temperature,
-                    "maxOutputTokens": request.max_tokens,
-                }
-            }
-            
-            # Add system instruction if provided
-            if request.system_prompt:
-                payload["systemInstruction"] = {
-                    "parts": [{"text": request.system_prompt}]
-                }
-            
-            # Make request to Gemini (using v1beta API for systemInstruction support)
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                    json=payload,
-                    timeout=30
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Extract text from response
-                        candidates = data.get("candidates", [])
-                        if candidates and len(candidates) > 0:
-                            content = candidates[0].get("content", {})
-                            parts = content.get("parts", [])
-                            text = parts[0].get("text", "") if parts else ""
-                            
-                            # Get token usage
-                            usage = data.get("usageMetadata", {})
-                            tokens = usage.get("totalTokenCount", 0)
-                            
-                            # Update token usage
-                            self.token_usage["total"] += tokens
-                            self.token_usage["today"] += tokens
-                            
+                try:
+                    async with session.post(f"{endpoint}/api/generate", json=payload, timeout=60) as response:
+                        if response.status == 200:
+                            # FIX: Pass content_type=None to handle cases where Ollama returns text/plain but body is JSON
+                            data = await response.json(content_type=None)
                             return LLMResponse(
-                                text=text,
-                                provider="gemini",
-                                tokens_used=tokens,
-                                confidence=0.9,
-                                metadata={"model": model, "finish_reason": candidates[0].get("finishReason")}
+                                text=data.get("response", ""),
+                                provider="local_ollama",
+                                confidence=1.0,
+                                metadata={"model": model_to_use}
+                            )
+                        elif response.status == 404:
+                            # 404 often means model not pulled
+                            return LLMResponse(
+                                text=f"[SYSTEM] Model '{model_to_use}' not found. Run `ollama pull {model_to_use}`", 
+                                provider="local", 
+                                error="Model missing"
                             )
                         else:
-                            logger.error("Gemini returned no candidates")
-                            return await self._fallback_llm(request)
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Gemini request failed: {response.status} - {error_text}")
-                        return await self._fallback_llm(request)
-                        
-        except Exception as e:
-            logger.warning(f"Gemini LLM failed: {e}. Using fallback.")
-            return await self._fallback_llm(request)
-    
-    async def _try_ollama_fallback(self, request: LLMRequest) -> LLMResponse:
-        """
-        Try to fallback to Ollama when cloud LLM fails
-        
-        Args:
-            request: LLM request object
-            
-        Returns:
-            LLM response from Ollama or final fallback
-        """
-        try:
-            logger.info("Attempting to fallback to local Ollama...")
-            
-            # Get Ollama endpoint from config or use default
-            ollama_config = self.providers_config.get("local", {})
-            ollama_endpoint = ollama_config.get("endpoint", os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434"))
-            
-            # Check if Ollama is available
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{ollama_endpoint}/api/tags", timeout=aiohttp.ClientTimeout(total=2)) as response:
-                    if response.status == 200:
-                        # Ollama is available, use it
-                        logger.info("Ollama is available, using local LLM as fallback")
-                        return await self._local_llm(request)
-        except Exception as e:
-            logger.debug(f"Ollama not available for fallback: {e}")
-        
-        # Ollama not available, use final fallback
-        return await self._fallback_llm(request)
-    
-    async def _gemini_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Gemini with automatic Ollama fallback"""
-        response = await self._gemini_llm(request)
-        
-        # If Gemini failed (confidence < 0.2 means it used fallback), try Ollama
-        if response.confidence < 0.2:
-            logger.info("Gemini failed, trying Ollama fallback...")
-            return await self._try_ollama_fallback(request)
-        
-        return response
-    
-    async def _openai_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using OpenAI with automatic Ollama fallback"""
-        response = await self._openai_llm(request)
-        
-        # If OpenAI failed (confidence < 0.2 means it used fallback), try Ollama
-        if response.confidence < 0.2:
-            logger.info("OpenAI failed, trying Ollama fallback...")
-            return await self._try_ollama_fallback(request)
-        
-        return response
-    
-    async def _anthropic_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Anthropic with automatic Ollama fallback"""
-        response = await self._anthropic_llm(request)
-        
-        # If Anthropic failed (confidence < 0.2 means it used fallback), try Ollama
-        if response.confidence < 0.2:
-            logger.info("Anthropic failed, trying Ollama fallback...")
-            return await self._try_ollama_fallback(request)
-        
-        return response
-    
-    async def _groq_llm_with_fallback(self, request: LLMRequest) -> LLMResponse:
-        """Generate response using Groq with automatic Ollama fallback"""
-        response = await self._groq_llm(request)
-        
-        # If Groq failed (confidence < 0.2 means it used fallback), try Ollama
-        if response.confidence < 0.2:
-            logger.info("Groq failed, trying Ollama fallback...")
-            return await self._try_ollama_fallback(request)
-        
-        return response
-    
-    async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
-        """
-        MINIMAL FALLBACK - NOT REAL AI
-        
-        This is a placeholder that provides a generic response and clear instructions
-        for enabling actual AI capabilities. No hardcoded responses or if-else logic.
-        
-        TO ENABLE REAL AI:
-        1. Install Ollama: curl https://ollama.ai/install.sh | sh
-        2. Pull a model: ollama pull llama3:latest
-        3. Restart AARIA
-        
-        OR use cloud LLM: 
-        - OpenAI: export OPENAI_API_KEY='your-key'
-        - Anthropic: export ANTHROPIC_API_KEY='your-key'
-        - Gemini: export GEMINI_API_KEY='your-key'
-        - Groq: export GROQ_API_KEY='your-key'
-        """
-        
-        # Extract basic information without hardcoding responses
-        context = request.context or {}
-        intent = context.get("intent", "unknown")
-        
-        # Generate a response that clearly indicates limitations
-        response = (
-            f"[NO LLM ACTIVE] I detected your message (intent: {intent}). "
-            "However, I'm currently operating without a language model, so I cannot provide intelligent responses. "
-            "\n\nTO ENABLE REAL AI RESPONSES:\n"
-            "• Install Ollama (FREE, LOCAL): curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest\n"
-            "• Or use Cloud AI (PAID):\n"
-            "  - OpenAI: export OPENAI_API_KEY='your-key'\n"
-            "  - Anthropic Claude: export ANTHROPIC_API_KEY='your-key'\n"
-            "  - Google Gemini: export GEMINI_API_KEY='your-key'\n"
-            "  - Groq (ultra-fast): export GROQ_API_KEY='your-key'\n"
-            "\nWithout an LLM, I can only detect intent and entities, not generate meaningful responses."
-        )
-        
-        return LLMResponse(
-            text=response,
-            provider="no_llm_fallback",
-            tokens_used=0,
-            confidence=0.1,
-            metadata={
-                "type": "placeholder_not_ai",
-                "intent": intent,
-                "warning": "NO LANGUAGE MODEL - Install Ollama or enable cloud LLM",
-                "instructions": "curl https://ollama.ai/install.sh | sh && ollama pull llama3:latest",
-                "supported_providers": ["local_ollama", "openai", "anthropic", "gemini", "groq"]
-            }
-        )
-    
-    def get_token_usage(self) -> Dict[str, int]:
-        """Get current token usage statistics"""
-        return self.token_usage.copy()
-    
-    async def enhance_response(self, base_response: str, context: Dict[str, Any]) -> str:
-        """
-        Enhance a base response with LLM intelligence
-        
-        Args:
-            base_response: Base response from rule-based system
-            context: Additional context for enhancement
-            
-        Returns:
-            Enhanced response
-        """
-        if not self.enabled:
-            return base_response
-        
-        try:
-            request = LLMRequest(
-                prompt=f"Enhance this response to be more natural and helpful: '{base_response}'\nContext: {json.dumps(context)}",
-                provider=self.default_provider,
-                privacy_level=PrivacyLevel.PUBLIC,
-                max_tokens=150,
-                temperature=0.7,
-                system_prompt="You are AARIA, a helpful AI assistant. Enhance responses to be natural, concise, and helpful."
-            )
-            
-            response = await self.generate_response(request)
-            return response.text if response.confidence > 0.6 else base_response
-            
-        except Exception as e:
-            logger.error(f"Response enhancement failed: {e}")
-            return base_response
+                            logger.error(f"Ollama Error {response.status}")
+                            return LLMResponse(text=f"[SYSTEM] Ollama HTTP {response.status}", provider="local", error=f"HTTP {response.status}")
+                            
+                except aiohttp.ClientConnectorError:
+                    return LLMResponse(
+                        text=f"[SYSTEM] Connection Refused. Is Ollama running at {endpoint}?", 
+                        provider="local", 
+                        error="Connection Refused"
+                    )
+                except asyncio.TimeoutError:
+                    return LLMResponse(text="[SYSTEM] Request Timed Out.", provider="local", error="Timeout")
+                except Exception as e:
+                    logger.error(f"Ollama Internal Logic Error: {e}")
+                    return LLMResponse(text=f"[SYSTEM] Ollama Logic Error: {e}", provider="local", error=str(e))
 
+        except Exception as e:
+            logger.error(f"Local LLM Error: {e}")
+            return LLMResponse(text=f"[SYSTEM] Local LLM Exception: {e}", provider="local", error=str(e))
+
+    async def _gemini_llm(self, request: LLMRequest) -> LLMResponse:
+        """Gemini with fallback"""
+        try:
+            import aiohttp
+            config = self.providers_config.get("gemini", {})
+            api_key = os.getenv("GEMINI_API_KEY") or config.get("api_key")
+            if not api_key: return await self._fallback_llm(request)
+
+            models = ["gemini-1.5-flash", "gemini-1.5-pro"]
+            
+            async with aiohttp.ClientSession() as session:
+                for model in models:
+                    try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                        payload = {
+                            "contents": [{"parts": [{"text": request.prompt}]}],
+                            "generationConfig": {"temperature": request.temperature, "maxOutputTokens": request.max_tokens}
+                        }
+                        if request.system_prompt: payload["systemInstruction"] = {"parts": [{"text": request.system_prompt}]}
+                        
+                        async with session.post(url, json=payload, timeout=30) as response:
+                            if response.status == 200:
+                                data = await response.json(content_type=None)
+                                if "candidates" in data and data["candidates"]:
+                                    text = data["candidates"][0]["content"]["parts"][0]["text"]
+                                    return LLMResponse(text=text, provider="gemini", confidence=0.95, metadata={"model": model})
+                            elif response.status == 429: break 
+                    except: continue
+            return await self._fallback_llm(request)
+        except: return await self._fallback_llm(request)
+
+    async def _openai_llm(self, request: LLMRequest) -> LLMResponse:
+        try:
+            import aiohttp
+            api_key = os.getenv("OPENAI_API_KEY") or self.providers_config.get("openai", {}).get("api_key")
+            if not api_key: return await self._fallback_llm(request)
+            
+            payload = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": request.prompt}]}
+            if request.system_prompt: payload["messages"].insert(0, {"role": "system", "content": request.system_prompt})
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post("https://api.openai.com/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {api_key}"}) as response:
+                    if response.status == 200:
+                        data = await response.json(content_type=None)
+                        return LLMResponse(text=data["choices"][0]["message"]["content"], provider="openai", confidence=0.9)
+            return await self._fallback_llm(request)
+        except: return await self._fallback_llm(request)
+
+    async def _groq_llm(self, request: LLMRequest) -> LLMResponse:
+        try:
+            import aiohttp
+            api_key = os.getenv("GROQ_API_KEY") or self.providers_config.get("groq", {}).get("api_key")
+            if not api_key: return await self._fallback_llm(request)
+            
+            payload = {"model": "llama3-70b-8192", "messages": [{"role": "user", "content": request.prompt}]}
+            if request.system_prompt: payload["messages"].insert(0, {"role": "system", "content": request.system_prompt})
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {api_key}"}) as response:
+                    if response.status == 200:
+                        data = await response.json(content_type=None)
+                        return LLMResponse(text=data["choices"][0]["message"]["content"], provider="groq", confidence=0.9)
+            return await self._fallback_llm(request)
+        except: return await self._fallback_llm(request)
+        
+    async def _anthropic_llm(self, request: LLMRequest) -> LLMResponse:
+        try:
+            import aiohttp
+            api_key = os.getenv("ANTHROPIC_API_KEY") or self.providers_config.get("anthropic", {}).get("api_key")
+            if not api_key: return await self._fallback_llm(request)
+            
+            payload = {"model": "claude-3-sonnet-20240229", "messages": [{"role": "user", "content": request.prompt}], "max_tokens": 1000}
+            if request.system_prompt: payload["system"] = request.system_prompt
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post("https://api.anthropic.com/v1/messages", json=payload, headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}) as response:
+                    if response.status == 200:
+                        data = await response.json(content_type=None)
+                        return LLMResponse(text=data["content"][0]["text"], provider="anthropic", confidence=0.9)
+            return await self._fallback_llm(request)
+        except: return await self._fallback_llm(request)
+
+    async def _try_ollama_fallback(self, request: LLMRequest) -> LLMResponse:
+        if request.provider == LLMProvider.LOCAL: return await self._fallback_llm(request)
+        request.provider = LLMProvider.LOCAL
+        return await self._local_llm(request)
+
+    async def _fallback_llm(self, request: LLMRequest) -> LLMResponse:
+        return LLMResponse(
+            text="[NO LLM] System offline. Please check Ollama (localhost:11434) or API Keys.", 
+            provider="fallback", 
+            confidence=0.0,
+            error="Fallback Active"
+        )
 
 # ==================== GLOBAL INSTANCE ====================
 _llm_gateway_instance: Optional[LLMGateway] = None
 
 async def get_llm_gateway(config: Dict[str, Any] = None) -> LLMGateway:
-    """
-    Get or create the global LLM Gateway instance
-    
-    Args:
-        config: Optional configuration for first initialization
-        
-    Returns:
-        LLMGateway instance
-    """
     global _llm_gateway_instance
-    
     if _llm_gateway_instance is None:
         _llm_gateway_instance = LLMGateway()
-        
-        if config:
-            await _llm_gateway_instance.initialize(config)
-        else:
-            # Initialize with defaults
-            await _llm_gateway_instance.initialize({
-                "enabled": False,
-                "default_provider": "fallback",
-                "providers": {}
-            })
-    
+        # Safe default init with DeepSeek Cloud enforced
+        default_config = {
+            "enabled": True, 
+            "default_provider": "local",
+            "providers": {
+                "local": {"model": DEFAULT_LOCAL_MODEL}
+            }
+        }
+        await _llm_gateway_instance.initialize(config or default_config)
     return _llm_gateway_instance

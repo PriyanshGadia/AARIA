@@ -1044,7 +1044,7 @@ class AssociationNetwork:
 
 # ==================== MEMORY STORAGE ENGINE ====================
 class MemoryStorageEngine:
-    """Encrypted memory storage with tiered access"""
+    """Encrypted memory storage with tiered access and persistence"""
     
     def __init__(self):
         self.encryption_manager = EncryptionManager()
@@ -1054,6 +1054,7 @@ class MemoryStorageEngine:
         self.access_log = deque(maxlen=10000)
         self.config = {}
         self.initialized = False
+        self.storage_file = os.path.join(os.path.dirname(__file__), "memory_store.enc")
         self.performance_metrics = {
             "memories_stored": 0,
             "memories_retrieved": 0,
@@ -1065,6 +1066,7 @@ class MemoryStorageEngine:
         self.memory_cache = {}  # memory_id -> (decrypted_data, timestamp)
         self.cache_size = 10000
         self.cache_ttl = timedelta(hours=1)
+        self._lock = asyncio.Lock()
         
     async def initialize(self, owner_biometric_hash: str, config: Dict[str, Any]) -> bool:
         """Initialize memory storage engine"""
@@ -1080,14 +1082,14 @@ class MemoryStorageEngine:
             if not encryption_success:
                 return False
             
-            # Load existing memories if any
+            # Load existing memories from disk
             await self._load_persistent_storage()
             
             # Start maintenance tasks
             asyncio.create_task(self._maintenance_loop())
             
             self.initialized = True
-            logger.info("MemoryStorageEngine initialized successfully")
+            logger.info(f"MemoryStorageEngine initialized. Loaded {len(self.memories)} memories.")
             return True
             
         except Exception as e:
@@ -1095,17 +1097,75 @@ class MemoryStorageEngine:
             return False
     
     async def _load_persistent_storage(self):
-        """Load memories from persistent storage"""
-        # In production, this would load from encrypted database
-        # For now, start with empty storage
-        pass
-    
+        """Load memories from encrypted persistent storage"""
+        if not os.path.exists(self.storage_file):
+            logger.info("No persistent storage found. Starting fresh.")
+            return
+
+        try:
+            async with self._lock:
+                with open(self.storage_file, 'rb') as f:
+                    encrypted_package_json = f.read().decode('utf-8')
+                
+                encrypted_package = json.loads(encrypted_package_json)
+                
+                # Decrypt the entire storage blob using ROOT tier keys
+                decryption_result = await self.encryption_manager.decrypt_data(
+                    encrypted_package, "root"
+                )
+                
+                if not decryption_result.get("success"):
+                    logger.error(f"Failed to decrypt storage: {decryption_result.get('error')}")
+                    return
+
+                # Deserialize the state
+                state_data = pickle.loads(decryption_result["decrypted_data"])
+                
+                self.memories = state_data.get("memories", {})
+                self.identity_profiles = state_data.get("identity_profiles", {})
+                self.association_network = state_data.get("association_network", AssociationNetwork())
+                
+                logger.info(f"Successfully loaded {len(self.memories)} memories and {len(self.identity_profiles)} profiles.")
+                
+        except Exception as e:
+            logger.error(f"Critical error loading persistent storage: {e}", exc_info=True)
+
     async def _save_persistent_storage(self):
-        """Save memories to persistent storage"""
-        # In production, this would save to encrypted database
-        # For now, just log
-        logger.debug(f"Saving {len(self.memories)} memories to persistent storage")
-    
+        """Save memories to encrypted persistent storage"""
+        if not self.initialized:
+            return
+
+        try:
+            async with self._lock:
+                # Prepare state for serialization
+                state_data = {
+                    "memories": self.memories,
+                    "identity_profiles": self.identity_profiles,
+                    "association_network": self.association_network
+                }
+                
+                serialized_data = pickle.dumps(state_data)
+                
+                # Encrypt the entire blob
+                encryption_result = await self.encryption_manager.encrypt_data(
+                    serialized_data, "root"
+                )
+                
+                if not encryption_result.get("success"):
+                    logger.error(f"Failed to encrypt storage for save: {encryption_result.get('error')}")
+                    return
+
+                # Write to disk atomically
+                temp_file = self.storage_file + ".tmp"
+                with open(temp_file, 'w') as f:
+                    json.dump(encryption_result, f)
+                
+                os.replace(temp_file, self.storage_file)
+                logger.debug(f"Saved {len(self.memories)} memories to persistent storage.")
+                
+        except Exception as e:
+            logger.error(f"Critical error saving persistent storage: {e}", exc_info=True)
+
     async def store_memory(self, data: Any, tier: DataTier = DataTier.OWNER_CONFIDENTIAL,
                           metadata: Dict[str, Any] = None, context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Store memory with encryption and indexing"""
@@ -1315,7 +1375,7 @@ class MemoryStorageEngine:
     
     async def search_memories(self, query: Dict[str, Any], access_level: str = "owner_root",
                             max_results: int = 50) -> Dict[str, Any]:
-        """Search memories based on query"""
+        """Search memories based on query with enhanced keyword matching."""
         if not self.initialized:
             return {"success": False, "error": "MemoryStorageEngine not initialized"}
         
@@ -1323,7 +1383,7 @@ class MemoryStorageEngine:
             search_results = []
             search_methods = []
             
-            # Semantic search by tags
+            # 1. Semantic search by tags (Exact Match)
             if "tags" in query:
                 tags = set(query["tags"])
                 semantic_results = self.association_network.semantic_search(tags, max_results)
@@ -1333,7 +1393,7 @@ class MemoryStorageEngine:
                     if memory_id in self.memories:
                         search_results.append(memory_id)
             
-            # Temporal search
+            # 2. Temporal search
             if "time_range" in query:
                 time_range = query["time_range"]
                 start_time = datetime.fromisoformat(time_range.get("start", datetime.now().isoformat()))
@@ -1348,37 +1408,68 @@ class MemoryStorageEngine:
                     if memory_id in self.memories and memory_id not in search_results:
                         search_results.append(memory_id)
             
-            # Text search (simplified)
-            if "text" in query:
-                # Simple keyword matching in tags
-                text = query["text"].lower()
+            # 3. Text search (Enhanced Keyword Matching)
+            if "text" in query and query["text"]:
+                text_input = query["text"].lower()
+                # Split input into significant keywords (length > 3)
+                keywords = [w for w in text_input.split() if len(w) > 3]
                 text_results = []
                 
                 for memory_id, memory_entry in self.memories.items():
-                    memory_tags = memory_entry.metadata.tags
-                    if any(text in tag.lower() for tag in memory_tags):
+                    # Check tags
+                    memory_tags = {t.lower() for t in memory_entry.metadata.tags}
+                    
+                    # Match if ANY keyword appears in ANY tag (Fuzzy association)
+                    if any(kw in tag for kw in keywords for tag in memory_tags):
                         text_results.append(memory_id)
-                
-                search_methods.append(("text", len(text_results)))
+                        continue
+                        
+                    # Also check if tags appear in the text input (Reverse association)
+                    if any(tag in text_input for tag in memory_tags):
+                        text_results.append(memory_id)
+
+                search_methods.append(("text_keyword", len(text_results)))
                 search_results.extend(text_results[:max_results])
             
-            # Remove duplicates and limit results
+            # Deduplicate and Filter by Access Level
             unique_results = []
             seen = set()
             for memory_id in search_results:
                 if memory_id not in seen and len(unique_results) < max_results:
                     # Check access permissions
-                    memory_tier = self.memories[memory_id].metadata.tier
-                    if await self._check_access_permission(memory_tier, access_level):
-                        unique_results.append(memory_id)
-                        seen.add(memory_id)
+                    if memory_id in self.memories:
+                        memory_tier = self.memories[memory_id].metadata.tier
+                        if await self._check_access_permission(memory_tier, access_level):
+                            unique_results.append(memory_id)
+                            seen.add(memory_id)
             
-            # Get memory details with access control
+            # Fetch Memory Details
             memories_details = []
             for memory_id in unique_results:
                 memory_entry = self.memories[memory_id]
+                
+                # Auto-decrypt for context window (Optimization)
+                data_preview = "[Encrypted]"
+                if self.memory_cache.get(memory_id):
+                    data_preview = self.memory_cache[memory_id][0]
+                else:
+                    # Attempt quick decrypt for the context window
+                    try:
+                        pkg = {
+                            "encrypted_data": base64.urlsafe_b64encode(memory_entry.encrypted_data).decode(),
+                            "metadata": memory_entry.encryption_metadata
+                        }
+                        tier_map = {DataTier.OWNER_CONFIDENTIAL: "owner_confidential"} # Mapping shortcut
+                        enc_tier = tier_map.get(memory_entry.metadata.tier, "owner_confidential")
+                        dec = await self.encryption_manager.decrypt_data(pkg, enc_tier)
+                        if dec["success"]:
+                            data_preview = dec["decrypted_data"].decode()
+                    except:
+                        pass
+
                 memories_details.append({
                     "memory_id": memory_id,
+                    "data": data_preview,
                     "metadata": memory_entry.metadata,
                     "access_allowed": True
                 })
@@ -1435,6 +1526,8 @@ class MemoryStorageEngine:
             # Log access
             self._log_access(memory_id, access_level, "update")
             
+            await self._save_persistent_storage()
+
             return {
                 "success": True,
                 "memory_id": memory_id,
@@ -1485,6 +1578,8 @@ class MemoryStorageEngine:
             
             logger.info(f"Deleted memory {memory_id} from tier {memory_metadata.tier.name}")
             
+            await self._save_persistent_storage()
+
             return {
                 "success": True,
                 "memory_id": memory_id,
@@ -1532,6 +1627,8 @@ class MemoryStorageEngine:
                 
                 self.identity_profiles[identity_id] = profile
                 
+                await self._save_persistent_storage()
+
                 return {
                     "success": True,
                     "operation": "created" if identity_id not in self.identity_profiles else "updated",
@@ -1542,6 +1639,7 @@ class MemoryStorageEngine:
             elif operation == "delete":
                 if identity_id in self.identity_profiles:
                     del self.identity_profiles[identity_id]
+                    await self._save_persistent_storage()
                     return {
                         "success": True,
                         "identity_id": identity_id,
@@ -1737,6 +1835,8 @@ class MemoryStorageEngine:
             
             logger.info(f"Memory consolidation completed: strengthened associations, removed {expired_count} expired memories")
             
+            await self._save_persistent_storage()
+
         except Exception as e:
             logger.error(f"Memory consolidation failed: {e}")
     
@@ -1830,7 +1930,6 @@ class MemoryStorageEngine:
             "performance_metrics": self.performance_metrics,
             "association_network": self.association_network.get_network_statistics()
         }
-
 # ==================== FUNCTION REGISTRY ====================
 class MemoryFunctionRegistry:
     """Registry of memory core neural functions"""
@@ -1969,15 +2068,24 @@ class MemoryFunctionRegistry:
             self.function_categories[category].append(name)
     
     async def create_neuron_for_function(self, function_name: str) -> Optional[MemoryNeuron]:
-        """Create a neuron specialized for a specific function"""
+        """
+        Create a neuron specialized for a specific function.
+        [FIX 1.1.0] Correctly parses specialization from category string.
+        """
         if function_name not in self.registered_functions:
             return None
         
         func_data = self.registered_functions[function_name]
+        
+        # CRITICAL FIX: Split category to get actual specialization (e.g., 'memory_indexing' -> 'indexing')
+        # Previous version incorrectly grabbed index [0] ('memory'), causing neurons to be misidentified.
+        cat_parts = func_data["category"].split('_')
+        specialization = cat_parts[1] if len(cat_parts) > 1 else cat_parts[0]
+        
         neuron = MemoryNeuron(
             function_name=function_name,
             function_body=func_data["function"],
-            specialization=func_data["category"].split('_')[0],  # First word as specialization
+            specialization=specialization,
             metadata={
                 "category": func_data["category"],
                 "description": func_data["description"],
@@ -1989,57 +2097,36 @@ class MemoryFunctionRegistry:
     # ========== CORE NEURAL FUNCTION IMPLEMENTATIONS ==========
     
     async def semantic_indexing(self, **kwargs) -> Dict[str, Any]:
-        """Index memories by semantic content"""
+        """Index memories by semantic content - extracting keywords as tags."""
         memory_data = kwargs.get("memory_data", {})
-        tags = kwargs.get("tags", [])
+        tags = set(kwargs.get("tags", []))
         context = kwargs.get("context", {})
         
-        if not memory_data:
-            return {
-                "success": False,
-                "error": "No memory data provided",
-                "indexed_tags": []
-            }
+        # Helper to extract words
+        def extract_keywords(text):
+            if not text: return []
+            # simple tokenization: split by space, remove punctuation
+            clean_text = "".join([c if c.isalnum() or c.isspace() else " " for c in str(text)])
+            return [w.lower() for w in clean_text.split() if len(w) > 3]
+
+        if isinstance(memory_data, str):
+            extracted = extract_keywords(memory_data)
+            tags.update(extracted)
+            
+        elif isinstance(memory_data, dict):
+            # Extract from values
+            for val in memory_data.values():
+                if isinstance(val, str):
+                    tags.update(extract_keywords(val))
         
-        # Extract semantic information
-        extracted_tags = set()
-        
-        if isinstance(memory_data, dict):
-            # Extract keys and values as potential tags
-            for key, value in memory_data.items():
-                if isinstance(key, str) and len(key) > 2:
-                    extracted_tags.add(key.lower())
-                
-                if isinstance(value, str) and len(value.split()) <= 3:
-                    extracted_tags.add(value.lower())
-                elif isinstance(value, (list, tuple)):
-                    for item in value:
-                        if isinstance(item, str) and len(item.split()) <= 3:
-                            extracted_tags.add(item.lower())
-        
-        elif isinstance(memory_data, str):
-            # Extract words as tags
-            words = memory_data.lower().split()
-            for word in words:
-                if len(word) > 3 and word.isalpha():
-                    extracted_tags.add(word)
-        
-        # Add provided tags
-        extracted_tags.update(tags)
-        
-        # Limit number of tags
-        extracted_tags = set(list(extracted_tags)[:20])
-        
-        # Calculate semantic density
-        semantic_density = len(extracted_tags) / max(1, len(str(memory_data).split()))
+        # Limit tag count to prevent bloat
+        final_tags = list(tags)[:30]
         
         return {
             "success": True,
-            "indexed_tags": list(extracted_tags),
-            "semantic_density": semantic_density,
-            "context_used": bool(context),
-            "memory_size": len(str(memory_data)),
-            "tag_count": len(extracted_tags)
+            "indexed_tags": final_tags,
+            "semantic_density": len(final_tags) / max(1, len(str(memory_data))),
+            "context_used": bool(context)
         }
     
     async def temporal_indexing(self, **kwargs) -> Dict[str, Any]:
@@ -3029,53 +3116,46 @@ class MemoryNeuralNetwork:
             }
     
     async def _process_store_operation(self, data: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-        """Process memory store operation"""
-        # Activate indexing neurons
+        """Process memory store operation with active neural indexing."""
+        # 1. Activate indexing neurons
+        # Note: 'indexing' specialization is now correctly assigned by create_neuron_for_function
         indexing_neurons = [n for n in self.neurons.values() if n.specialization == "indexing"]
         
-        indexing_results = []
-        for neuron in indexing_neurons[:3]:  # Use up to 3 indexing neurons
+        generated_tags = set(data.get("tags", []))
+        
+        # FIX: Ensure context is never None to prevent 'NoneType' error in neurons
+        safe_context = context if context is not None else {}
+        
+        # Parallel execution of indexing neurons
+        if indexing_neurons:
             exec_context = {
                 "memory_data": data.get("data"),
-                "tags": data.get("tags", []),
-                "context": context,
-                "current_emotion": data.get("emotion"),
-                "timestamp": data.get("timestamp", datetime.now())
+                "tags": list(generated_tags),
+                "context": safe_context,
+                "timestamp": datetime.now()
             }
             
-            result = await neuron.fire(0.8, exec_context)
-            if result:
-                indexing_results.append(result)
+            # Fire first 3 available neurons
+            for neuron in indexing_neurons[:3]:
+                result = await neuron.fire(0.8, exec_context)
+                if result and isinstance(result, dict) and "indexed_tags" in result:
+                    generated_tags.update(result["indexed_tags"])
         
-        # Extract indexing information
-        tags = set()
-        emotional_weight = 0.5
-        temporal_patterns = {}
-        
-        for result in indexing_results:
-            if result.get("success", False):
-                if "indexed_tags" in result:
-                    tags.update(result["indexed_tags"])
-                if "emotional_content" in result:
-                    emotional_weight = max(emotional_weight, result["emotional_content"].get("weight", 0.5))
-                if "temporal_patterns" in result:
-                    temporal_patterns.update(result["temporal_patterns"])
-        
-        # Prepare metadata
+        # 2. Prepare metadata with NEURALLY GENERATED tags
         metadata = {
-            "tags": list(tags),
-            "emotional_weight": emotional_weight,
+            "tags": list(generated_tags), # Critical: Pass generated tags to storage
+            "emotional_weight": data.get("emotional_weight", 0.5),
             "priority": data.get("priority", 0.5)
         }
         
-        # Determine tier
+        # 3. Determine tier
         tier_name = data.get("tier", "OWNER_CONFIDENTIAL").upper()
         try:
             tier = DataTier[tier_name]
         except KeyError:
             tier = DataTier.OWNER_CONFIDENTIAL
         
-        # Store memory
+        # 4. Store memory
         store_result = await self.memory_storage.store_memory(
             data.get("data"),
             tier=tier,
@@ -3085,11 +3165,9 @@ class MemoryNeuralNetwork:
         
         if store_result.get("success", False):
             self.performance_metrics["memories_processed"] += 1
-            
-            # Activate association neurons
-            memory_id = store_result.get("memory_id")
-            if memory_id:
-                await self._activate_association_neurons(memory_id, context)
+            # Trigger associations
+            if store_result.get("memory_id"):
+                await self._activate_association_neurons(store_result["memory_id"], context)
         
         return store_result
     
@@ -3357,7 +3435,6 @@ class MemoryNeuralNetwork:
                 pass
         
         logger.info(f"Memory core evolved with action: {action}")
-
 # ==================== MAIN MEMORY CORE CLASS ====================
 class MemoryCore:
     """Main orchestrator for Memory Core functionality"""
