@@ -339,6 +339,14 @@ class LLMGateway:
                                 provider="local", 
                                 error="Model missing"
                             )
+                        elif response.status == 503:
+                            # 503 means service unavailable - Ollama might be overloaded or starting up
+                            logger.warning("Ollama returned 503 Service Unavailable. The service may be overloaded or starting up.")
+                            return LLMResponse(
+                                text="[SYSTEM] Ollama is temporarily unavailable (503). Please try again in a moment.", 
+                                provider="local", 
+                                error="Service Unavailable"
+                            )
                         else:
                             logger.error(f"Ollama Error {response.status}")
                             return LLMResponse(text=f"[SYSTEM] Ollama HTTP {response.status}", provider="local", error=f"HTTP {response.status}")

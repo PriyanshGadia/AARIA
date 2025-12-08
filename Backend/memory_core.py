@@ -128,11 +128,15 @@ class EncryptionManager:
         self.initialized = False
         self.backend = default_backend()
         self.salt_storage = {}  # Store salts for consistency
+        self.salt_file = os.path.join(os.path.dirname(__file__), ".aaria_salts.json")
         
     async def initialize(self, owner_biometric_hash: str, config: Dict[str, Any]) -> bool:
         """Initialize encryption system with owner's biometric hash"""
         try:
             self.encryption_config = config
+            
+            # Load persisted salts from disk
+            await self._load_salts()
             
             # Derive master key from biometric hash
             self.master_key = await self._derive_master_key(owner_biometric_hash)
@@ -142,6 +146,9 @@ class EncryptionManager:
             
             # Schedule key rotation
             await self._schedule_key_rotation()
+            
+            # Save salts to disk for persistence
+            await self._save_salts()
             
             self.initialized = True
             logger.info("EncryptionManager initialized successfully")
@@ -213,6 +220,51 @@ class EncryptionManager:
             self.key_rotation_schedule[tier] = rotation_date
         
         logger.info(f"Scheduled key rotation every {rotation_days} days")
+    
+    async def _load_salts(self):
+        """Load salts from persistent storage"""
+        if not os.path.exists(self.salt_file):
+            logger.info("No persisted salts found. Starting fresh.")
+            return
+        
+        try:
+            with open(self.salt_file, 'r') as f:
+                salt_data = json.load(f)
+            
+            # Convert base64 encoded salts back to bytes
+            for salt_name, salt_b64 in salt_data.items():
+                self.salt_storage[salt_name] = base64.urlsafe_b64decode(salt_b64.encode())
+            
+            logger.info(f"Loaded {len(self.salt_storage)} persisted salts")
+        except Exception as e:
+            logger.error(f"Failed to load salts: {e}")
+            logger.warning("⚠️  CRITICAL: Salt loading failed. Generating new salts will make existing encrypted data unrecoverable!")
+            logger.warning("⚠️  If you have important encrypted data, backup the salt file and fix the loading error.")
+            # Continue with empty salt_storage, new salts will be generated
+    
+    async def _save_salts(self):
+        """Save salts to persistent storage"""
+        try:
+            # Convert bytes to base64 for JSON storage
+            salt_data = {}
+            for salt_name, salt_bytes in self.salt_storage.items():
+                salt_data[salt_name] = base64.urlsafe_b64encode(salt_bytes).decode()
+            
+            # Write atomically
+            temp_file = self.salt_file + ".tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(salt_data, f, indent=2)
+            
+            # Set restrictive permissions (owner read/write only)
+            try:
+                os.chmod(temp_file, 0o600)
+            except Exception as chmod_error:
+                logger.warning(f"Could not set restrictive permissions on salt file: {chmod_error}")
+            
+            os.replace(temp_file, self.salt_file)
+            logger.debug(f"Saved {len(self.salt_storage)} salts to persistent storage")
+        except Exception as e:
+            logger.error(f"Failed to save salts: {e}")
     
     async def encrypt_data(self, data: bytes, tier: str = "owner_confidential") -> Dict[str, Any]:
         """Encrypt data with tier-specific key - FIXED FINAL CIPHERTEXT"""
@@ -1080,6 +1132,7 @@ class MemoryStorageEngine:
             )
             
             if not encryption_success:
+                logger.error("Failed to initialize encryption manager. Memory storage cannot proceed.")
                 return False
             
             # Load existing memories from disk
@@ -1115,7 +1168,10 @@ class MemoryStorageEngine:
                 )
                 
                 if not decryption_result.get("success"):
-                    logger.error(f"Failed to decrypt storage: {decryption_result.get('error')}")
+                    error_msg = decryption_result.get('error', 'Unknown error')
+                    logger.error(f"Failed to decrypt storage: {error_msg}")
+                    logger.warning("This may be due to changed encryption keys or corrupted storage. Starting with fresh memory.")
+                    logger.info("Previous memories cannot be recovered without the original encryption keys.")
                     return
 
                 # Deserialize the state
