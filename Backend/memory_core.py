@@ -1098,6 +1098,15 @@ class AssociationNetwork:
 class MemoryStorageEngine:
     """Encrypted memory storage with tiered access and persistence"""
     
+    # Tier mapping for encryption/decryption
+    TIER_ENCRYPTION_MAP = {
+        DataTier.ROOT_DATABASE: "root",
+        DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
+        DataTier.ACCESS_DATA: "access",
+        DataTier.PUBLIC_DATA: "public",
+        DataTier.TEMPORAL_CACHE: "temporal"
+    }
+    
     def __init__(self):
         self.encryption_manager = EncryptionManager()
         self.memories: Dict[str, MemoryEntry] = {}
@@ -1243,14 +1252,7 @@ class MemoryStorageEngine:
                 serialized_data = pickle.dumps(data)
             
             # Determine encryption tier
-            tier_mapping = {
-                DataTier.ROOT_DATABASE: "root",
-                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
-                DataTier.ACCESS_DATA: "access",
-                DataTier.PUBLIC_DATA: "public",
-                DataTier.TEMPORAL_CACHE: "temporal"
-            }
-            encryption_tier = tier_mapping.get(tier, "owner_confidential")
+            encryption_tier = self.TIER_ENCRYPTION_MAP.get(tier, "owner_confidential")
             
             # Encrypt data
             encryption_result = await self.encryption_manager.encrypt_data(
@@ -1366,14 +1368,7 @@ class MemoryStorageEngine:
             }
             
             # Determine encryption tier
-            tier_mapping = {
-                DataTier.ROOT_DATABASE: "root",
-                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
-                DataTier.ACCESS_DATA: "access",
-                DataTier.PUBLIC_DATA: "public",
-                DataTier.TEMPORAL_CACHE: "temporal"
-            }
-            encryption_tier = tier_mapping.get(memory_metadata.tier, "owner_confidential")
+            encryption_tier = self.TIER_ENCRYPTION_MAP.get(memory_metadata.tier, "owner_confidential")
             
             # Decrypt data
             decryption_result = await self.encryption_manager.decrypt_data(
@@ -1464,7 +1459,7 @@ class MemoryStorageEngine:
                     if memory_id in self.memories and memory_id not in search_results:
                         search_results.append(memory_id)
             
-            # 3. Text search (Enhanced Keyword Matching)
+            # 3. Text search (Enhanced Keyword Matching with Content Search)
             if "text" in query and query["text"]:
                 text_input = query["text"].lower()
                 # Split input into significant keywords (length > 3)
@@ -1472,7 +1467,7 @@ class MemoryStorageEngine:
                 text_results = []
                 
                 for memory_id, memory_entry in self.memories.items():
-                    # Check tags
+                    # Check tags first (faster)
                     memory_tags = {t.lower() for t in memory_entry.metadata.tags}
                     
                     # Match if ANY keyword appears in ANY tag (Fuzzy association)
@@ -1483,6 +1478,42 @@ class MemoryStorageEngine:
                     # Also check if tags appear in the text input (Reverse association)
                     if any(tag in text_input for tag in memory_tags):
                         text_results.append(memory_id)
+                        continue
+                    
+                    # NEW: Search within decrypted memory content for better recall
+                    # This is essential for finding specific facts like dates, names, etc.
+                    try:
+                        # Check cache first
+                        if memory_id in self.memory_cache:
+                            cached_data, _ = self.memory_cache[memory_id]
+                            # Cached data is already a string, no need for str() conversion
+                            content = cached_data.lower() if isinstance(cached_data, str) else str(cached_data).lower()
+                        else:
+                            # Decrypt memory to search content
+                            pkg = {
+                                "encrypted_data": base64.urlsafe_b64encode(memory_entry.encrypted_data).decode(),
+                                "metadata": memory_entry.encryption_metadata
+                            }
+                            # Use class constant for tier mapping
+                            enc_tier = self.TIER_ENCRYPTION_MAP.get(memory_entry.metadata.tier, "owner_confidential")
+                            dec = await self.encryption_manager.decrypt_data(pkg, enc_tier)
+                            
+                            if dec.get("success"):
+                                decrypted_text = dec["decrypted_data"].decode()
+                                content = decrypted_text.lower()
+                                # Cache the decoded string for future searches
+                                self.memory_cache[memory_id] = (decrypted_text, datetime.now())
+                            else:
+                                continue
+                        
+                        # Search for keywords in content
+                        if any(kw in content for kw in keywords):
+                            text_results.append(memory_id)
+                            
+                    except Exception as e:
+                        # Log error but continue searching other memories
+                        logger.debug(f"Could not search content of memory {memory_id}: {e}")
+                        continue
 
                 search_methods.append(("text_keyword", len(text_results)))
                 search_results.extend(text_results[:max_results])
