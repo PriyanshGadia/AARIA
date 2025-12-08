@@ -1098,6 +1098,15 @@ class AssociationNetwork:
 class MemoryStorageEngine:
     """Encrypted memory storage with tiered access and persistence"""
     
+    # Tier mapping for encryption/decryption
+    TIER_ENCRYPTION_MAP = {
+        DataTier.ROOT_DATABASE: "root",
+        DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
+        DataTier.ACCESS_DATA: "access",
+        DataTier.PUBLIC_DATA: "public",
+        DataTier.TEMPORAL_CACHE: "temporal"
+    }
+    
     def __init__(self):
         self.encryption_manager = EncryptionManager()
         self.memories: Dict[str, MemoryEntry] = {}
@@ -1243,14 +1252,7 @@ class MemoryStorageEngine:
                 serialized_data = pickle.dumps(data)
             
             # Determine encryption tier
-            tier_mapping = {
-                DataTier.ROOT_DATABASE: "root",
-                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
-                DataTier.ACCESS_DATA: "access",
-                DataTier.PUBLIC_DATA: "public",
-                DataTier.TEMPORAL_CACHE: "temporal"
-            }
-            encryption_tier = tier_mapping.get(tier, "owner_confidential")
+            encryption_tier = self.TIER_ENCRYPTION_MAP.get(tier, "owner_confidential")
             
             # Encrypt data
             encryption_result = await self.encryption_manager.encrypt_data(
@@ -1366,14 +1368,7 @@ class MemoryStorageEngine:
             }
             
             # Determine encryption tier
-            tier_mapping = {
-                DataTier.ROOT_DATABASE: "root",
-                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
-                DataTier.ACCESS_DATA: "access",
-                DataTier.PUBLIC_DATA: "public",
-                DataTier.TEMPORAL_CACHE: "temporal"
-            }
-            encryption_tier = tier_mapping.get(memory_metadata.tier, "owner_confidential")
+            encryption_tier = self.TIER_ENCRYPTION_MAP.get(memory_metadata.tier, "owner_confidential")
             
             # Decrypt data
             decryption_result = await self.encryption_manager.decrypt_data(
@@ -1472,8 +1467,6 @@ class MemoryStorageEngine:
                 text_results = []
                 
                 for memory_id, memory_entry in self.memories.items():
-                    match_found = False
-                    
                     # Check tags first (faster)
                     memory_tags = {t.lower() for t in memory_entry.metadata.tags}
                     
@@ -1493,26 +1486,23 @@ class MemoryStorageEngine:
                         # Check cache first
                         if memory_id in self.memory_cache:
                             cached_data, _ = self.memory_cache[memory_id]
-                            content = str(cached_data).lower()
+                            # Cached data is already a string, no need for str() conversion
+                            content = cached_data.lower() if isinstance(cached_data, str) else str(cached_data).lower()
                         else:
                             # Decrypt memory to search content
                             pkg = {
                                 "encrypted_data": base64.urlsafe_b64encode(memory_entry.encrypted_data).decode(),
                                 "metadata": memory_entry.encryption_metadata
                             }
-                            tier_map = {
-                                DataTier.OWNER_CONFIDENTIAL: "owner_confidential",
-                                DataTier.ROOT_DATABASE: "root",
-                                DataTier.ACCESS_DATA: "access",
-                                DataTier.PUBLIC_DATA: "public"
-                            }
-                            enc_tier = tier_map.get(memory_entry.metadata.tier, "owner_confidential")
+                            # Use class constant for tier mapping
+                            enc_tier = self.TIER_ENCRYPTION_MAP.get(memory_entry.metadata.tier, "owner_confidential")
                             dec = await self.encryption_manager.decrypt_data(pkg, enc_tier)
                             
                             if dec.get("success"):
-                                content = dec["decrypted_data"].decode().lower()
-                                # Cache for future searches
-                                self.memory_cache[memory_id] = (dec["decrypted_data"].decode(), datetime.now())
+                                decrypted_text = dec["decrypted_data"].decode()
+                                content = decrypted_text.lower()
+                                # Cache the decoded string for future searches
+                                self.memory_cache[memory_id] = (decrypted_text, datetime.now())
                             else:
                                 continue
                         
