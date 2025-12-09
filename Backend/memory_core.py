@@ -96,6 +96,11 @@ class MemoryConfigLoader:
                     "encryption_level": "maximum",
                     "backup_frequency": "hourly"
                 },
+                "temporal_cache": {
+                    "access": ["owner_root"],
+                    "encryption_level": "medium",
+                    "backup_frequency": "none"  # Ephemeral data, no backup needed
+                },
                 "access_data": {
                     "access": ["owner_root", "owner_read", "privileged_users"],
                     "encryption_level": "high",

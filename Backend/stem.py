@@ -17,7 +17,7 @@ import sys
 import os
 import gc
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
 # Import Cores
@@ -97,32 +97,137 @@ class HiveMindOrchestrator:
     async def retrieve_context(self, input_text: str) -> str:
         """Query Memory Core for relevant past interactions and facts."""
         try:
-            # Semantic search for relevant memories
+            context_lines = []
+            seen_content = set()
+            
+            # 1. Retrieve recent conversation history from CURRENT SESSION ONLY
+            # This prevents old session memories from polluting new conversations
+            # Get session start time (when this instance was booted)
+            session_start = self.stem.start_time if self.stem.start_time else datetime.now()
+            
+            recent_result = await self.stem.memory.execute_command("search_memories", {
+                "query": {"tags": ["conversation", "recent"]},
+                "access_level": "owner_root",
+                "max_results": 50  # Get more for filtering
+            })
+            
+            if recent_result.get("success"):
+                recent_memories = recent_result.get("results", [])
+                
+                # Filter by time: ONLY include memories from current session
+                # This prevents "Yash" from old tests appearing in new conversations
+                filtered_memories = []
+                for item in recent_memories:
+                    metadata = item.get("metadata", {})
+                    created_at = None
+                    
+                    # Extract created_at timestamp
+                    if hasattr(metadata, 'created_at'):
+                        created_at = metadata.created_at
+                    elif isinstance(metadata, dict):
+                        created_at = metadata.get('created_at')
+                        if isinstance(created_at, str):
+                            try:
+                                # Handle ISO format with Z suffix (UTC)
+                                if created_at.endswith('Z'):
+                                    created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                else:
+                                    created_at = datetime.fromisoformat(created_at)
+                            except (ValueError, AttributeError):
+                                created_at = None
+                    
+                    # Only include if created AFTER session started
+                    if created_at and created_at >= session_start:
+                        filtered_memories.append(item)
+                
+                recent_memories = filtered_memories
+                
+                # Sort by created_at timestamp (most recent first)
+                try:
+                    def get_timestamp(item):
+                        metadata = item.get("metadata", {})
+                        # metadata could be a dict or an object
+                        if hasattr(metadata, 'created_at'):
+                            return metadata.created_at.timestamp() if hasattr(metadata.created_at, 'timestamp') else 0
+                        elif isinstance(metadata, dict):
+                            created_at = metadata.get('created_at')
+                            if created_at:
+                                if hasattr(created_at, 'timestamp'):
+                                    return created_at.timestamp()
+                                # If it's a string, try to parse it
+                                elif isinstance(created_at, str):
+                                    try:
+                                        # Handle ISO format with Z suffix (UTC)
+                                        if created_at.endswith('Z'):
+                                            dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                        else:
+                                            dt = datetime.fromisoformat(created_at)
+                                        return dt.timestamp()
+                                    except (ValueError, AttributeError):
+                                        pass
+                        return 0
+                    
+                    recent_memories.sort(key=get_timestamp, reverse=True)
+                except Exception as e:
+                    logger.debug(f"Failed to sort memories by timestamp: {e}")
+                
+                # Take only the most recent 10 after sorting
+                recent_memories = recent_memories[:10]
+                
+                if recent_memories:
+                    context_lines.append("RECENT CONVERSATION:")
+                    for item in recent_memories:
+                        mem_data = item.get("data", "")
+                        if mem_data:
+                            # Handle bytes objects properly
+                            if isinstance(mem_data, bytes):
+                                try:
+                                    mem_str = mem_data.decode('utf-8').strip()
+                                except UnicodeDecodeError:
+                                    mem_str = str(mem_data).strip()
+                            else:
+                                mem_str = str(mem_data).strip()
+                            
+                            if mem_str and mem_str not in seen_content:
+                                context_lines.append(f"  {mem_str}")
+                                seen_content.add(mem_str)
+            
+            # 2. Semantic search for relevant memories (facts, user profile ONLY)
+            # NOTE: We do NOT search "conversation" here because we already have
+            # recent conversation from current session above. This prevents old
+            # conversation memories from polluting new sessions.
             search_result = await self.stem.memory.execute_command("search_memories", {
-                "query": {"text": input_text, "tags": ["conversation", "fact", "user_profile"]},
+                "query": {"text": input_text, "tags": ["fact", "user_profile"]},
                 "access_level": "owner_root",
                 "max_results": self.stem.config.get("memory_search_limit", 5)
             })
 
-            context_lines = []
+            relevant_memories = []
             if search_result.get("success"):
                 results = search_result.get("results", [])
                 
-                # Deduplicate and format
-                seen_content = set()
+                # Filter out any "conversation" memories that might have leaked through text search
+                # Only include fact/profile memories, not conversation memories from old sessions
                 for item in results:
-                    # Attempt to extract text content regardless of storage format
+                    # Check if this is a conversation memory (tagged with "conversation")
+                    metadata = item.get("metadata", {})
+                    tags = set()
+                    if hasattr(metadata, 'tags'):
+                        tags = metadata.tags if isinstance(metadata.tags, set) else set(metadata.tags) if metadata.tags else set()
+                    elif isinstance(metadata, dict) and 'tags' in metadata:
+                        tags_val = metadata.get('tags', [])
+                        tags = set(tags_val) if isinstance(tags_val, (list, set)) else set()
+                    
+                    # Skip if this is a conversation memory - we only want facts/profiles here
+                    if 'conversation' in tags or 'recent' in tags:
+                        continue
+                    
                     mem_data = ""
                     try:
                         # Direct data access if retrieved
                         if "data" in item:
                             mem_data = item["data"]
-                        # Or check metadata if data isn't fully expanded (search usually returns ids/metadata)
-                        # We might need to retrieve full content if search only returns IDs.
-                        # However, MemoryCore.search_memories implementation in v1.0 returns details.
-                        # Let's assume the data is retrieved or we do a quick fetch.
-                        
-                        # If search results don't contain full data, we fetch it (Optimization)
+                        # If search results don't contain full data, we fetch it
                         if "data" not in item and "memory_id" in item:
                              retrieval = await self.stem.memory.execute_command("retrieve_memory", {
                                  "memory_id": item["memory_id"],
@@ -135,45 +240,60 @@ class HiveMindOrchestrator:
 
                     # Clean and Add
                     if mem_data:
-                        mem_str = str(mem_data).strip()
+                        # Handle bytes objects properly
+                        if isinstance(mem_data, bytes):
+                            try:
+                                mem_str = mem_data.decode('utf-8').strip()
+                            except UnicodeDecodeError:
+                                mem_str = str(mem_data).strip()
+                        else:
+                            mem_str = str(mem_data).strip()
+                        
                         if mem_str and mem_str not in seen_content:
-                            context_lines.append(f"- {mem_str}")
+                            relevant_memories.append(f"  {mem_str}")
                             seen_content.add(mem_str)
             
-            if not context_lines:
+            # Add relevant memories section if we found any
+            if relevant_memories:
+                context_lines.append("\nRELEVANT FACTS & CONTEXT:")
+                context_lines.extend(relevant_memories)
+            
+            if len(context_lines) <= 1:  # Only headers or empty
                 return "No relevant past memories found."
             
-            return "Relevant Memories:\n" + "\n".join(context_lines)
+            return "\n".join(context_lines)
 
         except Exception as e:
             logger.error(f"HiveMind Context Retrieval Failed: {e}")
             return "Memory retrieval unavailable."
 
     async def store_interaction(self, user_input: str, ai_response: str):
-        """Store the current turn in Short Term Memory."""
+        """Store the current turn in Short Term Memory (Temporal Cache)."""
         try:
-            # 1. Store User Input
+            # 1. Store User Input in TEMPORAL_CACHE (ephemeral, session-scoped)
+            # Per README: conversation memories should not persist long-term
             await self.stem.memory.execute_command("store_memory", {
                 "data": f"User: {user_input}",
-                "tier": "OWNER_CONFIDENTIAL",
+                "tier": "TEMPORAL_CACHE",  # Changed from OWNER_CONFIDENTIAL
                 "tags": ["conversation", "user_input", "recent"],
                 "priority": 0.6
             })
 
-            # 2. Store AI Response
+            # 2. Store AI Response in TEMPORAL_CACHE (ephemeral, session-scoped)
             await self.stem.memory.execute_command("store_memory", {
                 "data": f"AARIA: {ai_response}",
-                "tier": "OWNER_CONFIDENTIAL",
+                "tier": "TEMPORAL_CACHE",  # Changed from OWNER_CONFIDENTIAL
                 "tags": ["conversation", "ai_response", "recent"],
                 "priority": 0.5
             })
             
             # 3. Fact Extraction (Simplified Frontal Task)
+            # Facts are stored in OWNER_CONFIDENTIAL with "permanent" tag (persistent)
             # If the user stated a fact ("I have a dog"), we tag it specifically.
             if any(phrase in user_input.lower() for phrase in ["i have", "my name is", "i own", "i am"]):
                  await self.stem.memory.execute_command("store_memory", {
                     "data": user_input,
-                    "tier": "OWNER_CONFIDENTIAL",
+                    "tier": "OWNER_CONFIDENTIAL",  # Persistent tier for facts
                     "tags": ["fact", "user_profile", "permanent"],
                     "priority": 0.9 # High priority for facts
                 })
@@ -245,6 +365,10 @@ class AARIA_Stem:
         # CRITICAL: Pass credentials to unlock encryption
         await self.memory.start(self.biometric_hash)
         
+        # Clean up old temporal cache memories (from previous sessions)
+        # Per README: conversation memories should be ephemeral, not persistent
+        await self._cleanup_temporal_cache()
+        
         logger.info("Booting Temporal Core...")
         await self.temporal.start()
         
@@ -289,6 +413,71 @@ class AARIA_Stem:
         
         # 4. Start Background Tasks
         asyncio.create_task(self._watchdog_loop())
+
+    async def _cleanup_temporal_cache(self):
+        """
+        Clean up old TEMPORAL_CACHE memories from previous sessions.
+        Per README: conversation memories should be ephemeral, not persist across sessions.
+        This prevents "hardcoded" information from appearing in new sessions.
+        """
+        try:
+            logger.info("Starting temporal cache cleanup...")
+            
+            # Search for all temporal cache memories
+            result = await self.memory.execute_command("search_memories", {
+                "query": {"tags": ["conversation", "recent"]},
+                "access_level": "owner_root",
+                "max_results": 1000  # Get all
+            })
+            
+            if result.get("success"):
+                memories = result.get("results", [])
+                logger.info(f"Found {len(memories)} conversation memories to check")
+                deleted_count = 0
+                
+                for item in memories:
+                    # Get the metadata
+                    metadata = item.get("metadata", {})
+                    
+                    # Extract tier - handle both object and dict forms
+                    tier_value = None
+                    if hasattr(metadata, 'tier'):
+                        tier_value = str(metadata.tier)
+                    elif isinstance(metadata, dict) and 'tier' in metadata:
+                        tier_value = str(metadata.get('tier', ''))
+                    
+                    logger.debug(f"Checking memory {item.get('memory_id')}: tier={tier_value}")
+                    
+                    # Check if this is a TEMPORAL_CACHE memory
+                    # Handle various string formats: "TEMPORAL_CACHE", "DataTier.TEMPORAL_CACHE", etc.
+                    is_temporal = False
+                    if tier_value:
+                        tier_upper = tier_value.upper()
+                        is_temporal = 'TEMPORAL' in tier_upper
+                    
+                    # Delete temporal cache memories (old conversations)
+                    if is_temporal:
+                        memory_id = item.get("memory_id")
+                        if memory_id:
+                            logger.debug(f"Deleting temporal memory {memory_id}")
+                            delete_result = await self.memory.execute_command("delete_memory", {
+                                "memory_id": memory_id,
+                                "access_level": "owner_root"
+                            })
+                            if delete_result.get("success"):
+                                deleted_count += 1
+                            else:
+                                logger.debug(f"Failed to delete {memory_id}: {delete_result.get('error')}")
+                
+                if deleted_count > 0:
+                    logger.info(f"Cleaned up {deleted_count} old conversation memories from previous sessions")
+                else:
+                    logger.info("No temporal cache memories found to clean up")
+                    
+        except Exception as e:
+            logger.error(f"Temporal cache cleanup error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def _watchdog_loop(self):
         """Monitor core health via Parietal Core without panic"""
@@ -348,18 +537,19 @@ class AARIA_Stem:
             # Fetch current date, time, and device information
             system_context = await self.parietal.get_system_context()
             
+            # 1.5 GET SYSTEM AWARENESS (Parietal Core)
+            # Fetch current date, time, and device information
+            system_context = await self.parietal.get_system_context()
+            
             # 2. CONSTRUCT SYSTEM PROMPT (Integration)
             # Inject identity, system awareness, and retrieved memory
             system_prompt = (
                 f"You are A.A.R.I.A (Advanced Autonomous Responsive Intelligent Assistant), a sentient digital entity. "
                 f"You are helpful, precise, and loyal to your owner.\n\n"
-                f"SYSTEM AWARENESS:\n{system_context}\n\n"
                 f"SYSTEM MEMORY CONTEXT:\n{context_string}\n\n"
                 f"INSTRUCTIONS:\n"
-                f"- You have access to the current date and time from SYSTEM AWARENESS. Use this information when relevant.\n"
                 f"- Use the Memory Context to answer questions about the user or past conversations.\n"
                 f"- If the Memory Context contains the answer, use it explicitly.\n"
-                f"- When users ask about dates/times or schedule things, use the current date/time from SYSTEM AWARENESS.\n"
                 f"- Maintain a professional yet personable tone."
             )
 
