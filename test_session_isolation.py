@@ -41,8 +41,8 @@ async def test_session_isolation():
         await stem_old.shutdown()
         
         # Wait a moment to ensure different session times
-        print("\n2. Waiting 2 seconds to simulate time passing...")
-        await asyncio.sleep(2)
+        print("\n2. Waiting 0.2 seconds to ensure different session times...")
+        await asyncio.sleep(0.2)
         
         print("\n=== NEW SESSION (NOW) ===")
         print("3. Starting fresh AARIA instance...")

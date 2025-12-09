@@ -128,7 +128,11 @@ class HiveMindOrchestrator:
                         created_at = metadata.get('created_at')
                         if isinstance(created_at, str):
                             try:
-                                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                # Handle ISO format with Z suffix (UTC)
+                                if created_at.endswith('Z'):
+                                    created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                else:
+                                    created_at = datetime.fromisoformat(created_at)
                             except (ValueError, AttributeError):
                                 created_at = None
                     
@@ -153,7 +157,11 @@ class HiveMindOrchestrator:
                                 # If it's a string, try to parse it
                                 elif isinstance(created_at, str):
                                     try:
-                                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                        # Handle ISO format with Z suffix (UTC)
+                                        if created_at.endswith('Z'):
+                                            dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                        else:
+                                            dt = datetime.fromisoformat(created_at)
                                         return dt.timestamp()
                                     except (ValueError, AttributeError):
                                         pass
