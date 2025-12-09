@@ -110,14 +110,30 @@ class HiveMindOrchestrator:
             
             if recent_result.get("success"):
                 recent_memories = recent_result.get("results", [])
-                # Sort by timestamp (most recent first) if metadata includes it
+                # Sort by created_at timestamp (most recent first) if metadata includes it
                 try:
-                    recent_memories.sort(
-                        key=lambda x: x.get("metadata", {}).get("timestamp", 0) if isinstance(x.get("metadata", {}), dict) else 0,
-                        reverse=True
-                    )
-                except Exception:
-                    pass  # If sorting fails, continue with unsorted results
+                    def get_timestamp(item):
+                        metadata = item.get("metadata", {})
+                        # metadata could be a dict or an object
+                        if hasattr(metadata, 'created_at'):
+                            return metadata.created_at.timestamp() if hasattr(metadata.created_at, 'timestamp') else 0
+                        elif isinstance(metadata, dict):
+                            created_at = metadata.get('created_at')
+                            if created_at:
+                                if hasattr(created_at, 'timestamp'):
+                                    return created_at.timestamp()
+                                # If it's a string, try to parse it
+                                elif isinstance(created_at, str):
+                                    try:
+                                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                        return dt.timestamp()
+                                    except (ValueError, AttributeError):
+                                        pass
+                        return 0
+                    
+                    recent_memories.sort(key=get_timestamp, reverse=True)
+                except Exception as e:
+                    logger.debug(f"Failed to sort memories by timestamp: {e}")
                 
                 # Take only the most recent 10 after sorting
                 recent_memories = recent_memories[:10]
@@ -127,7 +143,15 @@ class HiveMindOrchestrator:
                     for item in recent_memories:
                         mem_data = item.get("data", "")
                         if mem_data:
-                            mem_str = str(mem_data).strip()
+                            # Handle bytes objects properly
+                            if isinstance(mem_data, bytes):
+                                try:
+                                    mem_str = mem_data.decode('utf-8').strip()
+                                except UnicodeDecodeError:
+                                    mem_str = str(mem_data).strip()
+                            else:
+                                mem_str = str(mem_data).strip()
+                            
                             if mem_str and mem_str not in seen_content:
                                 context_lines.append(f"  {mem_str}")
                                 seen_content.add(mem_str)
@@ -163,7 +187,15 @@ class HiveMindOrchestrator:
 
                     # Clean and Add
                     if mem_data:
-                        mem_str = str(mem_data).strip()
+                        # Handle bytes objects properly
+                        if isinstance(mem_data, bytes):
+                            try:
+                                mem_str = mem_data.decode('utf-8').strip()
+                            except UnicodeDecodeError:
+                                mem_str = str(mem_data).strip()
+                        else:
+                            mem_str = str(mem_data).strip()
+                        
                         if mem_str and mem_str not in seen_content:
                             relevant_memories.append(f"  {mem_str}")
                             seen_content.add(mem_str)
@@ -388,14 +420,16 @@ class AARIA_Stem:
                 f"You are helpful, precise, and loyal to your owner.\n\n"
                 f"SYSTEM AWARENESS:\n{system_context}\n\n"
                 f"MEMORY CONTEXT:\n{context_string}\n\n"
-                f"INSTRUCTIONS:\n"
-                f"- You have access to the current date and time from SYSTEM AWARENESS. Use this information when relevant.\n"
-                f"- CRITICAL: The RECENT CONVERSATION section shows the immediate conversation context. Always reference this first to understand what the user is currently discussing.\n"
-                f"- Use the RELEVANT FACTS & CONTEXT section for additional background information about the user.\n"
-                f"- When the user says 'yes', 'no', or uses pronouns like 'his/her/their', refer to the RECENT CONVERSATION to understand what they're referring to.\n"
-                f"- Stay focused on the current topic being discussed in the recent conversation.\n"
-                f"- When users ask about dates/times or schedule things, use the current date/time from SYSTEM AWARENESS.\n"
-                f"- Maintain a professional yet personable tone."
+                f"CRITICAL INSTRUCTIONS:\n"
+                f"1. The CURRENT DATE and TIME are in SYSTEM AWARENESS - use them for all date/time related queries\n"
+                f"2. The RECENT CONVERSATION shows the last few messages - THIS IS YOUR PRIMARY CONTEXT\n"
+                f"3. When the user makes a request (e.g., 'set a reminder', 'suggest gifts'), ALWAYS check the RECENT CONVERSATION to understand WHAT it's for\n"
+                f"4. If the recent conversation mentions a person (like 'Yash') and event (like 'birthday'), connect them to the current request\n"
+                f"5. DO NOT ask for information that was already provided in the RECENT CONVERSATION\n"
+                f"6. When the user says 'yes', 'no', 'for him/her', etc., refer BACK to the RECENT CONVERSATION to understand the context\n"
+                f"7. Stay focused on the topic being discussed in the recent conversation\n"
+                f"8. Be proactive - if the user mentions an event in X days, calculate the exact date using SYSTEM AWARENESS\n"
+                f"9. Maintain continuity - remember what was discussed in previous messages of this conversation"
             )
 
             # 3. LLM REQUEST (Gateway)
