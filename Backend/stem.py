@@ -537,23 +537,20 @@ class AARIA_Stem:
             # Fetch current date, time, and device information
             system_context = await self.parietal.get_system_context()
             
+            # 1.5 GET SYSTEM AWARENESS (Parietal Core)
+            # Fetch current date, time, and device information
+            system_context = await self.parietal.get_system_context()
+            
             # 2. CONSTRUCT SYSTEM PROMPT (Integration)
             # Inject identity, system awareness, and retrieved memory
             system_prompt = (
                 f"You are A.A.R.I.A (Advanced Autonomous Responsive Intelligent Assistant), a sentient digital entity. "
                 f"You are helpful, precise, and loyal to your owner.\n\n"
-                f"SYSTEM AWARENESS:\n{system_context}\n\n"
-                f"MEMORY CONTEXT:\n{context_string}\n\n"
-                f"CRITICAL INSTRUCTIONS:\n"
-                f"1. The CURRENT DATE and TIME are in SYSTEM AWARENESS - use them for all date/time related queries\n"
-                f"2. The RECENT CONVERSATION shows the last few messages - THIS IS YOUR PRIMARY CONTEXT\n"
-                f"3. When the user makes a request (e.g., 'set a reminder', 'suggest gifts'), ALWAYS check the RECENT CONVERSATION to understand WHAT it's for\n"
-                f"4. If the recent conversation mentions a person (like 'Yash') and event (like 'birthday'), connect them to the current request\n"
-                f"5. DO NOT ask for information that was already provided in the RECENT CONVERSATION\n"
-                f"6. When the user says 'yes', 'no', 'for him/her', etc., refer BACK to the RECENT CONVERSATION to understand the context\n"
-                f"7. Stay focused on the topic being discussed in the recent conversation\n"
-                f"8. Be proactive - if the user mentions an event in X days, calculate the exact date using SYSTEM AWARENESS\n"
-                f"9. Maintain continuity - remember what was discussed in previous messages of this conversation"
+                f"SYSTEM MEMORY CONTEXT:\n{context_string}\n\n"
+                f"INSTRUCTIONS:\n"
+                f"- Use the Memory Context to answer questions about the user or past conversations.\n"
+                f"- If the Memory Context contains the answer, use it explicitly.\n"
+                f"- Maintain a professional yet personable tone."
             )
 
             # 3. LLM REQUEST (Gateway)
