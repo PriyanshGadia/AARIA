@@ -17,7 +17,7 @@ import sys
 import os
 import gc
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
 # Import Cores
@@ -100,17 +100,45 @@ class HiveMindOrchestrator:
             context_lines = []
             seen_content = set()
             
-            # 1. ALWAYS retrieve recent conversation history (last 10 turns)
-            # This ensures continuity in ongoing conversations
+            # 1. Retrieve recent conversation history from CURRENT SESSION ONLY
+            # This prevents old session memories from polluting new conversations
+            # Get session start time (when this instance was booted)
+            session_start = self.stem.start_time if self.stem.start_time else datetime.now()
+            
             recent_result = await self.stem.memory.execute_command("search_memories", {
                 "query": {"tags": ["conversation", "recent"]},
                 "access_level": "owner_root",
-                "max_results": 20  # Get more to ensure we have enough after sorting
+                "max_results": 50  # Get more for filtering
             })
             
             if recent_result.get("success"):
                 recent_memories = recent_result.get("results", [])
-                # Sort by created_at timestamp (most recent first) if metadata includes it
+                
+                # Filter by time: ONLY include memories from current session
+                # This prevents "Yash" from old tests appearing in new conversations
+                filtered_memories = []
+                for item in recent_memories:
+                    metadata = item.get("metadata", {})
+                    created_at = None
+                    
+                    # Extract created_at timestamp
+                    if hasattr(metadata, 'created_at'):
+                        created_at = metadata.created_at
+                    elif isinstance(metadata, dict):
+                        created_at = metadata.get('created_at')
+                        if isinstance(created_at, str):
+                            try:
+                                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                            except (ValueError, AttributeError):
+                                created_at = None
+                    
+                    # Only include if created AFTER session started
+                    if created_at and created_at >= session_start:
+                        filtered_memories.append(item)
+                
+                recent_memories = filtered_memories
+                
+                # Sort by created_at timestamp (most recent first)
                 try:
                     def get_timestamp(item):
                         metadata = item.get("metadata", {})
@@ -156,10 +184,12 @@ class HiveMindOrchestrator:
                                 context_lines.append(f"  {mem_str}")
                                 seen_content.add(mem_str)
             
-            # 2. Semantic search for relevant memories (facts, user profile, older conversations)
-            # We search for facts/profiles AND older conversations that might be relevant
+            # 2. Semantic search for relevant memories (facts, user profile ONLY)
+            # NOTE: We do NOT search "conversation" here because we already have
+            # recent conversation from current session above. This prevents old
+            # conversation memories from polluting new sessions.
             search_result = await self.stem.memory.execute_command("search_memories", {
-                "query": {"text": input_text, "tags": ["fact", "user_profile", "conversation"]},
+                "query": {"text": input_text, "tags": ["fact", "user_profile"]},
                 "access_level": "owner_root",
                 "max_results": self.stem.config.get("memory_search_limit", 5)
             })
@@ -168,7 +198,22 @@ class HiveMindOrchestrator:
             if search_result.get("success"):
                 results = search_result.get("results", [])
                 
+                # Filter out any "conversation" memories that might have leaked through text search
+                # Only include fact/profile memories, not conversation memories from old sessions
                 for item in results:
+                    # Check if this is a conversation memory (tagged with "conversation")
+                    metadata = item.get("metadata", {})
+                    tags = set()
+                    if hasattr(metadata, 'tags'):
+                        tags = metadata.tags if isinstance(metadata.tags, set) else set(metadata.tags) if metadata.tags else set()
+                    elif isinstance(metadata, dict) and 'tags' in metadata:
+                        tags_val = metadata.get('tags', [])
+                        tags = set(tags_val) if isinstance(tags_val, (list, set)) else set()
+                    
+                    # Skip if this is a conversation memory - we only want facts/profiles here
+                    if 'conversation' in tags or 'recent' in tags:
+                        continue
+                    
                     mem_data = ""
                     try:
                         # Direct data access if retrieved
