@@ -268,30 +268,32 @@ class HiveMindOrchestrator:
             return "Memory retrieval unavailable."
 
     async def store_interaction(self, user_input: str, ai_response: str):
-        """Store the current turn in Short Term Memory."""
+        """Store the current turn in Short Term Memory (Temporal Cache)."""
         try:
-            # 1. Store User Input
+            # 1. Store User Input in TEMPORAL_CACHE (ephemeral, session-scoped)
+            # Per README: conversation memories should not persist long-term
             await self.stem.memory.execute_command("store_memory", {
                 "data": f"User: {user_input}",
-                "tier": "OWNER_CONFIDENTIAL",
+                "tier": "TEMPORAL_CACHE",  # Changed from OWNER_CONFIDENTIAL
                 "tags": ["conversation", "user_input", "recent"],
                 "priority": 0.6
             })
 
-            # 2. Store AI Response
+            # 2. Store AI Response in TEMPORAL_CACHE (ephemeral, session-scoped)
             await self.stem.memory.execute_command("store_memory", {
                 "data": f"AARIA: {ai_response}",
-                "tier": "OWNER_CONFIDENTIAL",
+                "tier": "TEMPORAL_CACHE",  # Changed from OWNER_CONFIDENTIAL
                 "tags": ["conversation", "ai_response", "recent"],
                 "priority": 0.5
             })
             
             # 3. Fact Extraction (Simplified Frontal Task)
+            # Facts are stored in OWNER_CONFIDENTIAL with "permanent" tag (persistent)
             # If the user stated a fact ("I have a dog"), we tag it specifically.
             if any(phrase in user_input.lower() for phrase in ["i have", "my name is", "i own", "i am"]):
                  await self.stem.memory.execute_command("store_memory", {
                     "data": user_input,
-                    "tier": "OWNER_CONFIDENTIAL",
+                    "tier": "OWNER_CONFIDENTIAL",  # Persistent tier for facts
                     "tags": ["fact", "user_profile", "permanent"],
                     "priority": 0.9 # High priority for facts
                 })
@@ -363,6 +365,10 @@ class AARIA_Stem:
         # CRITICAL: Pass credentials to unlock encryption
         await self.memory.start(self.biometric_hash)
         
+        # Clean up old temporal cache memories (from previous sessions)
+        # Per README: conversation memories should be ephemeral, not persistent
+        await self._cleanup_temporal_cache()
+        
         logger.info("Booting Temporal Core...")
         await self.temporal.start()
         
@@ -407,6 +413,71 @@ class AARIA_Stem:
         
         # 4. Start Background Tasks
         asyncio.create_task(self._watchdog_loop())
+
+    async def _cleanup_temporal_cache(self):
+        """
+        Clean up old TEMPORAL_CACHE memories from previous sessions.
+        Per README: conversation memories should be ephemeral, not persist across sessions.
+        This prevents "hardcoded" information from appearing in new sessions.
+        """
+        try:
+            logger.info("Starting temporal cache cleanup...")
+            
+            # Search for all temporal cache memories
+            result = await self.memory.execute_command("search_memories", {
+                "query": {"tags": ["conversation", "recent"]},
+                "access_level": "owner_root",
+                "max_results": 1000  # Get all
+            })
+            
+            if result.get("success"):
+                memories = result.get("results", [])
+                logger.info(f"Found {len(memories)} conversation memories to check")
+                deleted_count = 0
+                
+                for item in memories:
+                    # Get the metadata
+                    metadata = item.get("metadata", {})
+                    
+                    # Extract tier - handle both object and dict forms
+                    tier_value = None
+                    if hasattr(metadata, 'tier'):
+                        tier_value = str(metadata.tier)
+                    elif isinstance(metadata, dict) and 'tier' in metadata:
+                        tier_value = str(metadata.get('tier', ''))
+                    
+                    logger.debug(f"Checking memory {item.get('memory_id')}: tier={tier_value}")
+                    
+                    # Check if this is a TEMPORAL_CACHE memory
+                    # Handle various string formats: "TEMPORAL_CACHE", "DataTier.TEMPORAL_CACHE", etc.
+                    is_temporal = False
+                    if tier_value:
+                        tier_upper = tier_value.upper()
+                        is_temporal = 'TEMPORAL' in tier_upper
+                    
+                    # Delete temporal cache memories (old conversations)
+                    if is_temporal:
+                        memory_id = item.get("memory_id")
+                        if memory_id:
+                            logger.debug(f"Deleting temporal memory {memory_id}")
+                            delete_result = await self.memory.execute_command("delete_memory", {
+                                "memory_id": memory_id,
+                                "access_level": "owner_root"
+                            })
+                            if delete_result.get("success"):
+                                deleted_count += 1
+                            else:
+                                logger.debug(f"Failed to delete {memory_id}: {delete_result.get('error')}")
+                
+                if deleted_count > 0:
+                    logger.info(f"Cleaned up {deleted_count} old conversation memories from previous sessions")
+                else:
+                    logger.info("No temporal cache memories found to clean up")
+                    
+        except Exception as e:
+            logger.error(f"Temporal cache cleanup error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def _watchdog_loop(self):
         """Monitor core health via Parietal Core without panic"""
@@ -578,10 +649,6 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # Note: WindowsSelectorEventLoopPolicy and set_event_loop_policy are deprecated in Python 3.14+
-        # The default event loop policy should work for most cases on Windows 10+
-        # If running on older Windows versions and encountering event loop issues,
-        # consider using ProactorEventLoop which is the default on Windows since Python 3.8
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
